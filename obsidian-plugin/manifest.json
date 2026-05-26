@@ -1,0 +1,9 @@
+{
+  "id": "lexicon",
+  "name": "Lexicon",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Ingest sources and chat with a Lexicon vault.",
+  "author": "Lexicon",
+  "isDesktopOnly": true
+}

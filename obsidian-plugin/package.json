@@ -1,0 +1,17 @@
+{
+  "name": "obsidian-lexicon",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch"
+  },
+  "dependencies": {
+    "obsidian": "^1.5.12"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.4.0"
+  }
+}
