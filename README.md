@@ -9,17 +9,6 @@ Trạng thái hiện tại:
 - MinerU dùng để parse/OCR PDF scan trước khi đưa nội dung vào AI processor.
 - Vault là thư mục Markdown local; app config/index nằm ngoài vault.
 
-## Không commit gì?
-
-Không đưa các thư mục/file local này lên GitHub:
-
-- `.env`: chứa API key thật.
-- `.lexicon/`: config local, registry vault, index local.
-- `.tmp/`: vault test và dữ liệu thử.
-- `.venv/`, `node_modules/`, build output.
-- Folder cài MinerU local như `D:\MinerU`.
-
-**Không cần up folder MinerU.** MinerU là service runtime riêng. Người dùng clone repo sẽ tự cài và chạy MinerU API local nếu cần OCR PDF.
 
 ## Yêu cầu hệ thống
 
