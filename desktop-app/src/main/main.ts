@@ -106,6 +106,18 @@ function createWindow() {
     }
   });
 
+  window.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`Renderer failed to load ${validatedURL}: ${errorCode} ${errorDescription}`);
+  });
+  window.webContents.on("render-process-gone", (_event, details) => {
+    console.error(`Renderer process gone: ${details.reason}`);
+  });
+  window.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    if (level >= 2) {
+      console.error(`Renderer console: ${message} (${sourceId}:${line})`);
+    }
+  });
+
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
     void window.loadURL(devServerUrl);

@@ -163,18 +163,17 @@ Lưu ý: `npm.cmd install` và `npm.cmd run dev` phải chạy trong `desktop-ap
 
 ## Sử dụng trong app
 
-1. Nhập vault path, ví dụ `D:\Lexicon\.tmp\e2e-vault`.
-2. Bấm `Load`.
-3. Vào `Settings` kiểm tra System Health:
-   - `ai_provider: ok` nếu AI endpoint hoạt động.
-   - `mineru: ok` nếu MinerU đang chạy.
-   - `requests: ok`.
-4. Vào `Settings` -> `Vault Agent`, bấm `Reload agent.md` hoặc `Create/load template`.
-5. Vào `Dashboard` hoặc `Review`, dùng Add Source để ingest text/file/image/url.
-6. Vào `Review`, sửa Markdown, xử lý duplicate, rồi approve.
-7. Vào `Workspace` để đọc/search note đã commit.
-8. Vào `Chat` để hỏi vault và có thể lưu answer vào review queue.
-9. Vào `Decay` để kiểm tra/cập nhật note quá hạn.
+1. Mở tab `Setup`.
+2. Nhập vault path, ví dụ `D:\Lexicon\.tmp\e2e-vault`.
+3. Bấm `Create vault` nếu tạo mới, hoặc `Load existing` nếu dùng vault đã có.
+4. Trong Setup, cấu hình AI endpoint/API key env và bấm `Save settings`.
+5. Bấm `Run doctor` để kiểm tra `ai_provider`, `mineru`, `requests`.
+6. Tạo hoặc load `agent.md`, chỉnh rule nếu cần, rồi bấm `Save agent.md`.
+7. Vào `Dashboard` hoặc `Review`, dùng Add Source để ingest text/file/image/url.
+8. Vào `Review`, sửa Markdown, xử lý duplicate, rồi approve.
+9. Vào `Workspace` để đọc/search note đã commit.
+10. Vào `Chat` để hỏi vault và có thể lưu answer vào review queue.
+11. Vào `Decay` để kiểm tra/cập nhật note quá hạn.
 
 ## CLI workflow nhanh
 
@@ -293,6 +292,8 @@ cd D:\Lexicon
 pytest -q
 
 cd D:\Lexicon\desktop-app
+npm.cmd run clean
 npm.cmd run typecheck
 npm.cmd run build
+npm.cmd start
 ```

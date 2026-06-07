@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 type SourceMode = "text" | "file" | "image" | "url";
 type KnowledgeFolder = "concepts" | "guidelines" | "references";
-type ActiveView = "dashboard" | "workspace" | "chat" | "review" | "decay" | "settings";
+type ActiveView = "setup" | "dashboard" | "workspace" | "chat" | "review" | "decay" | "settings";
 type KnowledgeMode = "vault-only" | "vault+model" | "vault+web";
 type DuplicateDecision = "keep" | "link" | "merge";
 
@@ -101,11 +101,22 @@ type AgentPayload = {
   vault: string;
 };
 
+function lexiconApi() {
+  if (!window.lexicon) {
+    throw new Error("Lexicon desktop bridge is not loaded. Restart the app after building, then try again.");
+  }
+  return window.lexicon;
+}
+
 function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [doctor, setDoctor] = useState<Doctor | null>(null);
-  const [activeView, setActiveView] = useState<ActiveView>("dashboard");
+  const [activeView, setActiveView] = useState<ActiveView>(() =>
+    localStorage.getItem("lexicon.vaultPath") ? "dashboard" : "setup"
+  );
   const [vaultPath, setVaultPath] = useState(() => localStorage.getItem("lexicon.vaultPath") ?? "");
+  const [setupVaultName, setSetupVaultName] = useState("Lexicon Vault");
+  const [setupResult, setSetupResult] = useState<string | null>(null);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [decay, setDecay] = useState<DecayItem[]>([]);
   const [vaultNoteCount, setVaultNoteCount] = useState<number | null>(null);
@@ -171,7 +182,9 @@ function App() {
   const selectedFileUsesMineru = sourceMode === "image" || selectedFileIsPdf;
   const vaultName = vaultPath.trim().split(/[\\/]/).filter(Boolean).pop() ?? "No vault loaded";
   const viewTitle =
-    activeView === "workspace"
+    activeView === "setup"
+      ? "First-run setup"
+      : activeView === "workspace"
       ? "Workspace"
       : activeView === "chat"
         ? "Vault chat"
@@ -210,6 +223,10 @@ function App() {
     () => parseDuplicateWarnings(selectedReview?.warnings ?? []),
     [selectedReview]
   );
+  const setupVaultReady = Boolean(vaultPath.trim()) && vaultNoteCount !== null;
+  const setupAiReady = doctor?.services?.ai_provider === "ok";
+  const setupMineruReady = doctor?.services?.mineru === "ok";
+  const setupAgentReady = Boolean(agentBody.trim());
 
   function reportError(err: unknown) {
     const raw = err instanceof Error ? err.message : String(err);
@@ -222,8 +239,8 @@ function App() {
 
   async function refreshAppHealth() {
     const [settingsResult, doctorResult] = await Promise.all([
-      window.lexicon.run("settings", ["--json"]),
-      window.lexicon.run("doctor", ["--json"])
+      lexiconApi().run("settings", ["--json"]),
+      lexiconApi().run("doctor", ["--json"])
     ]);
     setSettings(settingsResult.settings);
     setDoctor(doctorResult.doctor);
@@ -255,9 +272,9 @@ function App() {
     setError(null);
     try {
       const [inboxResult, decayResult, workspaceResult] = await Promise.all([
-        window.lexicon.run("inbox", ["--vault", vaultPath, "--json"]),
-        window.lexicon.run("decay", ["--vault", vaultPath, "--json"]),
-        window.lexicon.run("workspace", ["--vault", vaultPath, "--json"])
+        lexiconApi().run("inbox", ["--vault", vaultPath, "--json"]),
+        lexiconApi().run("decay", ["--vault", vaultPath, "--json"]),
+        lexiconApi().run("workspace", ["--vault", vaultPath, "--json"])
       ]);
       setInbox(inboxResult.items ?? []);
       setDecay(decayResult.items ?? []);
@@ -282,6 +299,31 @@ function App() {
     }
   }
 
+  async function createOrLoadSetupVault(createVault: boolean) {
+    if (!vaultPath.trim()) {
+      setError("Set a vault path before continuing setup.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setSetupResult(null);
+    try {
+      if (createVault) {
+        const args = [vaultPath.trim(), "--json"];
+        if (setupVaultName.trim()) args.splice(1, 0, "--name", setupVaultName.trim());
+        await lexiconApi().run("init-vault", args);
+      }
+      localStorage.setItem("lexicon.vaultPath", vaultPath.trim());
+      await refreshVault();
+      await loadVaultAgent(true);
+      setSetupResult(createVault ? `Vault created and loaded: ${vaultPath.trim()}` : `Vault loaded: ${vaultPath.trim()}`);
+    } catch (err) {
+      reportError(err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function refreshWorkspace(query = workspaceQuery) {
     if (!vaultPath.trim()) {
       setWorkspaceNotes([]);
@@ -296,7 +338,7 @@ function App() {
       const args = cleanQuery
         ? ["--vault", vaultPath, "--search", cleanQuery, "--limit", "12", "--json"]
         : ["--vault", vaultPath, "--json"];
-      const result = await window.lexicon.run("workspace", args);
+      const result = await lexiconApi().run("workspace", args);
       if (cleanQuery) {
         setWorkspaceHits(result.hits ?? []);
       } else {
@@ -315,7 +357,7 @@ function App() {
     setWorkspaceBusy(true);
     setError(null);
     try {
-      const result = await window.lexicon.run("workspace", ["--vault", vaultPath, "--read", path, "--json"]);
+      const result = await lexiconApi().run("workspace", ["--vault", vaultPath, "--read", path, "--json"]);
       setSelectedWorkspaceNote(result.note);
     } catch (err) {
       reportError(err);
@@ -356,7 +398,7 @@ function App() {
       const effectiveTitle = chatTitle.trim() || titleFromQuestion(chatQuestion);
       if (chatSave) args.push("--title", effectiveTitle);
       args.push("--json", chatQuestion.trim());
-      const result = await window.lexicon.run("chat", args);
+      const result = await lexiconApi().run("chat", args);
       setChatResult(result);
       setChatHistory((items) => [
         {
@@ -386,7 +428,7 @@ function App() {
     setError(null);
     setDecayResult(null);
     try {
-      const result = await window.lexicon.run("workspace", ["--vault", vaultPath, "--read", item.path, "--json"]);
+      const result = await lexiconApi().run("workspace", ["--vault", vaultPath, "--read", item.path, "--json"]);
       setSelectedDecay(item);
       setSelectedDecayNote(result.note);
       setDecayReviewedAt(item.reviewed_at || todayIso());
@@ -404,7 +446,7 @@ function App() {
     setError(null);
     setDecayResult(null);
     try {
-      const result = await window.lexicon.run("decay", [
+      const result = await lexiconApi().run("decay", [
         "--vault",
         vaultPath,
         "--update",
@@ -433,7 +475,7 @@ function App() {
     setIngestBusy(true);
     try {
       const endpoint = mineruEndpoint.trim();
-      await window.lexicon.run("settings", [
+      await lexiconApi().run("settings", [
         "--mineru-endpoint",
         endpoint,
         "--mineru-timeout-seconds",
@@ -454,7 +496,7 @@ function App() {
     setSettingsResult(null);
     setSettingsBusy(true);
     try {
-      const result = await window.lexicon.run("settings", [
+      const result = await lexiconApi().run("settings", [
         "--provider",
         settingsProvider.trim() || "local",
         "--model",
@@ -493,7 +535,7 @@ function App() {
     try {
       const args = ["--vault", vaultPath, "--json"];
       if (init) args.splice(2, 0, "--init");
-      const result = await window.lexicon.run("agent", args);
+      const result = await lexiconApi().run("agent", args);
       setAgent(result.agent);
       setAgentBody(result.agent.body ?? "");
       setAgentDirty(false);
@@ -511,7 +553,7 @@ function App() {
     setError(null);
     setAgentResult(null);
     try {
-      const result = await window.lexicon.run("agent", [
+      const result = await lexiconApi().run("agent", [
         "--vault",
         vaultPath,
         "--init",
@@ -531,7 +573,7 @@ function App() {
   }
 
   async function chooseSourceFile() {
-    const selected = await window.lexicon.selectFile();
+    const selected = await lexiconApi().selectFile();
     if (selected) {
       setSourceFile(selected);
       if (!sourceTitle.trim()) {
@@ -570,7 +612,7 @@ function App() {
   }
 
   async function updateReviewBody(item: InboxItem, body = reviewBody) {
-    return window.lexicon.run("inbox", [
+    return lexiconApi().run("inbox", [
       "--vault",
       vaultPath,
       "--replace-body",
@@ -589,7 +631,7 @@ function App() {
     try {
       if (sourceMode === "file" && selectedFileIsPdf && mineruEndpoint.trim() !== (settings?.mineru_endpoint ?? "")) {
         setIngestStep("Saving MinerU settings");
-        await window.lexicon.run("settings", [
+        await lexiconApi().run("settings", [
           "--mineru-endpoint",
           mineruEndpoint.trim(),
           "--mineru-timeout-seconds",
@@ -600,7 +642,7 @@ function App() {
       }
       if (sourceMode === "image" && mineruEndpoint.trim() !== (settings?.mineru_endpoint ?? "")) {
         setIngestStep("Saving MinerU settings");
-        await window.lexicon.run("settings", [
+        await lexiconApi().run("settings", [
           "--mineru-endpoint",
           mineruEndpoint.trim(),
           "--mineru-timeout-seconds",
@@ -610,7 +652,7 @@ function App() {
         await refreshAppHealth();
       }
       setIngestStep(selectedFileUsesMineru ? "Extracting with MinerU and preparing review item" : "Extracting source and preparing review item");
-      const result = await window.lexicon.run("ingest", ingestArgs());
+      const result = await lexiconApi().run("ingest", ingestArgs());
       setIngestResult(`Created review item: ${result.filename}`);
       setIngestStep("Review item created");
       await refreshVault();
@@ -636,7 +678,7 @@ function App() {
     setReviewBusy(true);
     setError(null);
     try {
-      const result = await window.lexicon.run("inbox", ["--vault", vaultPath, "--show", String(item.index), "--json"]);
+      const result = await lexiconApi().run("inbox", ["--vault", vaultPath, "--show", String(item.index), "--json"]);
       setSelectedReview(result.item);
       setReviewBody(result.item.body ?? result.item.body_preview ?? "");
       setReviewFolder((result.item.suggested_folder || "concepts") as KnowledgeFolder);
@@ -682,7 +724,7 @@ function App() {
           await updateReviewBody(selectedReview);
           setReviewDirty(false);
         }
-        const result = await window.lexicon.run("inbox", [
+        const result = await lexiconApi().run("inbox", [
           "--vault",
           vaultPath,
           "--merge-into",
@@ -691,7 +733,7 @@ function App() {
           duplicateTarget,
           "--json"
         ]);
-        await window.lexicon.run("scan", ["--vault", vaultPath, "--json"]);
+        await lexiconApi().run("scan", ["--vault", vaultPath, "--json"]);
         setSelectedReview(null);
         setReviewBody("");
         setReviewSaveStatus(null);
@@ -714,7 +756,7 @@ function App() {
       } else if (finalReviewBody !== reviewBody) {
         await updateReviewBody(selectedReview, finalReviewBody);
       }
-      await window.lexicon.run("inbox", [
+      await lexiconApi().run("inbox", [
         "--vault",
         vaultPath,
         "--approve",
@@ -723,7 +765,7 @@ function App() {
         reviewFolder,
         "--json"
       ]);
-      await window.lexicon.run("scan", ["--vault", vaultPath, "--json"]);
+      await lexiconApi().run("scan", ["--vault", vaultPath, "--json"]);
       setSelectedReview(null);
       setReviewBody("");
       setReviewSaveStatus(null);
@@ -745,7 +787,7 @@ function App() {
     setReviewBusy(true);
     setError(null);
     try {
-      await window.lexicon.run("inbox", ["--vault", vaultPath, "--reject", String(selectedReview.index), "--json"]);
+      await lexiconApi().run("inbox", ["--vault", vaultPath, "--reject", String(selectedReview.index), "--json"]);
       setSelectedReview(null);
       setReviewBody("");
       setReviewDirty(false);
@@ -805,6 +847,7 @@ function App() {
           <strong>{vaultName}</strong>
         </div>
         <nav className="nav-list" aria-label="Primary">
+          <button className={activeView === "setup" ? "active" : ""} onClick={() => setActiveView("setup")}>Setup</button>
           <button className={activeView === "dashboard" ? "active" : ""} onClick={() => setActiveView("dashboard")}>Dashboard</button>
           <button className={activeView === "workspace" ? "active" : ""} onClick={() => setActiveView("workspace")}>Workspace</button>
           <button className={activeView === "chat" ? "active" : ""} onClick={() => setActiveView("chat")}>Chat</button>
@@ -820,7 +863,9 @@ function App() {
             <p className="eyebrow">Standalone desktop shell</p>
             <h2>{viewTitle}</h2>
             <p className="topbar-copy">
-              {activeView === "workspace"
+              {activeView === "setup"
+                ? "Create or load a vault, verify AI and MinerU, prepare agent.md, then enter the workspace."
+                : activeView === "workspace"
                 ? "Browse committed notes, inspect Markdown, and move into chat when a question needs synthesis."
                 : activeView === "chat"
                   ? "Ask against indexed vault context, then save useful answers back into review."
@@ -847,6 +892,7 @@ function App() {
         {decayResult ? <div className="success-panel">{decayResult}</div> : null}
         {settingsResult ? <div className="success-panel">{settingsResult}</div> : null}
         {agentResult ? <div className="success-panel">{agentResult}</div> : null}
+        {setupResult ? <div className="success-panel">{setupResult}</div> : null}
 
         <section className="vault-control">
           <label htmlFor="vaultPath">Vault path</label>
@@ -862,7 +908,167 @@ function App() {
           </div>
         </section>
 
-        {activeView === "settings" ? (
+        {activeView === "setup" ? (
+          <section className="setup-flow">
+            <section className="panel setup-hero-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="panel-kicker">Setup checklist</p>
+                  <h3>Bring the local workspace online</h3>
+                </div>
+                <span className={setupVaultReady && setupAiReady ? "status ready" : "status"}>{setupVaultReady && setupAiReady ? "ready to ingest" : "needs setup"}</span>
+              </div>
+              <div className="setup-progress">
+                <SetupStep label="Vault" done={setupVaultReady} />
+                <SetupStep label="AI" done={setupAiReady} />
+                <SetupStep label="MinerU" done={setupMineruReady} />
+                <SetupStep label="Agent" done={setupAgentReady} />
+              </div>
+            </section>
+
+            <section className="setup-grid">
+              <section className="panel setup-step-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="panel-kicker">Step 1</p>
+                    <h3>Vault</h3>
+                  </div>
+                  <span className={setupVaultReady ? "status ready" : "status danger"}>{setupVaultReady ? `${vaultNoteCount} notes` : "not loaded"}</span>
+                </div>
+                <div className="form-grid setup-form-grid">
+                  <label>
+                    Vault display name
+                    <input value={setupVaultName} onChange={(event) => setSetupVaultName(event.target.value)} placeholder="Lexicon Vault" disabled={loading} />
+                  </label>
+                  <label>
+                    Current path
+                    <input value={vaultPath} onChange={(event) => setVaultPath(event.target.value)} placeholder="D:\Lexicon\.tmp\e2e-vault" spellCheck={false} disabled={loading} />
+                  </label>
+                </div>
+                <p className="inline-help">Use Create for a new empty vault, or Load for an existing vault folder.</p>
+                <div className="button-row">
+                  <button onClick={() => void createOrLoadSetupVault(false)} disabled={loading || !vaultPath.trim()}>Load existing</button>
+                  <button className="primary" onClick={() => void createOrLoadSetupVault(true)} disabled={loading || !vaultPath.trim()}>
+                    {loading ? "Working" : "Create vault"}
+                  </button>
+                </div>
+              </section>
+
+              <section className="panel setup-step-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="panel-kicker">Step 2</p>
+                    <h3>AI and extraction</h3>
+                  </div>
+                  <span className={setupAiReady ? "status ready" : "status danger"}>{setupAiReady ? "AI ok" : "check AI"}</span>
+                </div>
+                <div className="form-grid setup-form-grid">
+                  <label>
+                    Provider
+                    <select value={settingsProvider} onChange={(event) => setSettingsProvider(event.target.value)} disabled={settingsBusy}>
+                      <option value="local">local fallback</option>
+                      <option value="openai-compatible">openai-compatible</option>
+                      <option value="anthropic">anthropic</option>
+                      <option value="ollama">ollama</option>
+                    </select>
+                  </label>
+                  <label>
+                    Model
+                    <input value={settingsModel} onChange={(event) => setSettingsModel(event.target.value)} placeholder="best" disabled={settingsBusy} />
+                  </label>
+                  <label>
+                    Base URL
+                    <input value={settingsBaseUrl} onChange={(event) => setSettingsBaseUrl(event.target.value)} placeholder="http://localhost:20128/v1" disabled={settingsBusy} />
+                  </label>
+                  <label>
+                    API key env
+                    <input value={settingsApiKeyEnv} onChange={(event) => setSettingsApiKeyEnv(event.target.value)} placeholder="LEXICON_API_KEY" disabled={settingsBusy} />
+                  </label>
+                  <label>
+                    Knowledge mode
+                    <select value={settingsDefaultMode} onChange={(event) => setSettingsDefaultMode(event.target.value as KnowledgeMode)} disabled={settingsBusy}>
+                      <option value="vault-only">vault-only</option>
+                      <option value="vault+model">vault+model</option>
+                      <option value="vault+web">vault+web</option>
+                    </select>
+                  </label>
+                  <label>
+                    MinerU endpoint
+                    <input value={mineruEndpoint} onChange={(event) => setMineruEndpoint(event.target.value)} placeholder="http://127.0.0.1:8888" disabled={settingsBusy} />
+                  </label>
+                  <label>
+                    MinerU timeout seconds
+                    <input value={mineruTimeoutSeconds} onChange={(event) => setMineruTimeoutSeconds(event.target.value)} inputMode="numeric" disabled={settingsBusy} />
+                  </label>
+                </div>
+                <div className="button-row">
+                  <button onClick={() => void refreshAppHealth()} disabled={settingsBusy}>Run doctor</button>
+                  <button className="primary" onClick={() => void saveSystemSettings()} disabled={settingsBusy}>
+                    {settingsBusy ? "Saving" : "Save settings"}
+                  </button>
+                </div>
+                <div className="dependency-list setup-health-list">
+                  {serviceRows.map((row) => (
+                    <span key={row.name} className={row.status === "ok" ? "pill ok" : "pill danger"}>
+                      {row.name}: {row.status}
+                    </span>
+                  ))}
+                </div>
+              </section>
+
+              <section className="panel setup-step-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="panel-kicker">Step 3</p>
+                    <h3>Vault agent</h3>
+                  </div>
+                  <span className={setupAgentReady ? "status ready" : "status"}>{setupAgentReady ? "agent ready" : "not loaded"}</span>
+                </div>
+                <p className="inline-help">Create or load <code>agent.md</code> so ingest and chat use vault-specific rules.</p>
+                <div className="agent-toolbar setup-agent-toolbar">
+                  <button onClick={() => void loadVaultAgent(false)} disabled={agentBusy || !vaultPath.trim()}>Load agent.md</button>
+                  <button onClick={() => void loadVaultAgent(true)} disabled={agentBusy || !vaultPath.trim()}>Create template</button>
+                  <button className="primary" onClick={() => void saveVaultAgent()} disabled={agentBusy || !vaultPath.trim() || !agentBody.trim() || !agentDirty}>
+                    {agentBusy ? "Saving" : "Save agent.md"}
+                  </button>
+                </div>
+                <label className="markdown-editor setup-agent-editor">
+                  Agent Markdown
+                  <textarea
+                    value={agentBody}
+                    onChange={(event) => {
+                      setAgentBody(event.target.value);
+                      setAgentDirty(true);
+                      setAgentResult(null);
+                    }}
+                    placeholder="Create or load agent.md after a vault is loaded."
+                    spellCheck={false}
+                    disabled={agentBusy || !vaultPath.trim()}
+                  />
+                </label>
+              </section>
+
+              <section className="panel setup-step-panel setup-finish-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="panel-kicker">Step 4</p>
+                    <h3>Start working</h3>
+                  </div>
+                  <span className={setupVaultReady ? "status ready" : "status"}>{setupVaultReady ? "vault loaded" : "waiting"}</span>
+                </div>
+                <ul className="setup-list">
+                  <li>Add PDF/image/text sources from Dashboard.</li>
+                  <li>Review AI output before committing notes.</li>
+                  <li>Use Workspace and Chat only after the vault is indexed.</li>
+                </ul>
+                <div className="button-row">
+                  <button onClick={() => setActiveView("dashboard")} disabled={!setupVaultReady}>Open dashboard</button>
+                  <button className="primary" onClick={() => setActiveView("workspace")} disabled={!setupVaultReady}>Open workspace</button>
+                </div>
+              </section>
+            </section>
+          </section>
+        ) : activeView === "settings" ? (
           <section className="settings-grid">
             <section className="panel settings-form-panel">
               <div className="panel-header">
@@ -1090,7 +1296,7 @@ function App() {
                 >
                   Show all
                 </button>
-                <button onClick={() => void window.lexicon.run("scan", ["--vault", vaultPath, "--json"]).then(() => refreshWorkspace())} disabled={workspaceBusy || !vaultPath.trim()}>
+                <button onClick={() => void lexiconApi().run("scan", ["--vault", vaultPath, "--json"]).then(() => refreshWorkspace())} disabled={workspaceBusy || !vaultPath.trim()}>
                   Rebuild index
                 </button>
               </div>
@@ -1859,6 +2065,15 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
       <h3>{title}</h3>
       {children}
     </section>
+  );
+}
+
+function SetupStep({ label, done }: { label: string; done: boolean }) {
+  return (
+    <div className={done ? "setup-progress-step done" : "setup-progress-step"}>
+      <span>{done ? "Ready" : "Pending"}</span>
+      <strong>{label}</strong>
+    </div>
   );
 }
 
