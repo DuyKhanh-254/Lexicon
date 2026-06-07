@@ -67,8 +67,13 @@ class Vault:
     def read_agent(self) -> str:
         return (self.path / "agent.md").read_text(encoding="utf-8")
 
+    def write_agent(self, body: str) -> Path:
+        target = self.path / "agent.md"
+        target.write_text(body.strip() + "\n", encoding="utf-8")
+        return target
+
     def markdown_files(self) -> list[Path]:
-        ignored = {"_inbox", "_assets", ".obsidian"}
+        ignored = {"_inbox", "_assets", "_trash", ".obsidian"}
         files: list[Path] = []
         for path in self.path.rglob("*.md"):
             parts = set(path.relative_to(self.path).parts)

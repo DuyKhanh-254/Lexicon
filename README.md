@@ -1,21 +1,27 @@
 # Lexicon
 
-Lexicon là ứng dụng quản lý tri thức local-first. Người dùng có thể ingest tài liệu, đưa qua AI để chuẩn hóa thành note Markdown, review trước khi commit vào vault, rồi chat/search dựa trên nội dung vault.
+Lexicon là ứng dụng quản lý tri thức **local-first**. Người dùng có thể đưa tài liệu, ảnh, URL hoặc ghi chú thô vào hệ thống; AI chuẩn hóa thành Markdown; người dùng review trước khi commit vào vault; sau đó có thể search, chat, kiểm tra decay và tiếp tục lưu tri thức mới vào vault.
 
-Trạng thái hiện tại:
+Lexicon hiện đi theo hướng **desktop app độc lập**. Python core chỉ là engine/CLI JSON bridge cho Electron UI.
 
-- Core Python CLI: `ingest`, `inbox`, `scan`, `chat`, `decay`, `doctor`.
-- Desktop app Electron + React: dashboard, ingestion UI, MinerU integration, review workflow.
-- MinerU dùng để parse/OCR PDF scan trước khi đưa nội dung vào AI processor.
-- Vault là thư mục Markdown local; app config/index nằm ngoài vault.
+## Tính năng hiện tại
 
+- Desktop app Electron + React: Dashboard, Workspace, Chat, Review, Decay, Settings.
+- Add Source: URL, PDF/file, Image, Note.
+- MinerU integration cho PDF scan và image OCR.
+- Human Review Gate: sửa Markdown, xem preview, approve/reject.
+- Duplicate workflow: Keep new, Link related, Merge into existing.
+- Workspace: browse notes, search chunks, đọc Markdown đã render, mở wikilink.
+- Chat/RAG: hỏi theo vault, citation qua `[[...]]`, lưu câu trả lời vào review queue.
+- Knowledge Decay: phát hiện note expired/due soon và cập nhật metadata.
+- Vault Agent: đọc/sửa/lưu `agent.md` để định nghĩa vai trò, scope và rule cho từng vault.
 
 ## Yêu cầu hệ thống
 
-- Python 3.10+ cho Lexicon core. Dự án hiện chạy tốt với Python 3.13.
+- Python 3.10+ cho Lexicon core. Dự án đang chạy tốt với Python 3.13.
 - Node.js + npm cho desktop app.
 - API AI OpenAI-compatible hoặc local LLM endpoint.
-- MinerU riêng nếu muốn parse/OCR PDF scan.
+- MinerU nếu muốn OCR PDF scan hoặc ảnh.
 
 Lưu ý: MinerU trên Windows nên chạy bằng Python 3.10-3.12 trong virtualenv riêng. Không nên cài MinerU vào `.venv` của Lexicon nếu Lexicon đang dùng Python 3.13.
 
@@ -38,7 +44,7 @@ python -m lexicon.cli doctor
 
 ## Cấu hình AI
 
-Lexicon không lưu API key trực tiếp trong config. Key nên để trong biến môi trường hoặc file `.env` local không commit.
+Lexicon không lưu API key trực tiếp trong config. Key nên đặt trong biến môi trường hoặc file `.env` local không commit.
 
 Tạo `.env`:
 
@@ -96,10 +102,12 @@ uv pip install -U "mineru[all]"
 Chạy MinerU API:
 
 ```powershell
+cd D:\MinerU
+.\.venv\Scripts\Activate.ps1
 mineru-api --host 127.0.0.1 --port 8888
 ```
 
-Để terminal MinerU mở. Mở PowerShell khác để kiểm tra:
+Giữ terminal MinerU mở. Mở PowerShell khác để kiểm tra:
 
 ```powershell
 Test-NetConnection localhost -Port 8888
@@ -129,13 +137,13 @@ POST http://127.0.0.1:8888/file_parse
 
 ## Chạy desktop app
 
-Terminal 1: chạy AI local nếu dùng local endpoint, ví dụ:
+Terminal 1: chạy AI local nếu dùng local endpoint.
 
 ```text
 http://localhost:20128/v1
 ```
 
-Terminal 2: chạy MinerU nếu ingest PDF scan:
+Terminal 2: chạy MinerU nếu ingest PDF scan hoặc ảnh.
 
 ```powershell
 cd D:\MinerU
@@ -143,7 +151,7 @@ cd D:\MinerU
 mineru-api --host 127.0.0.1 --port 8888
 ```
 
-Terminal 3: chạy Lexicon desktop:
+Terminal 3: chạy Lexicon desktop.
 
 ```powershell
 cd D:\Lexicon\desktop-app
@@ -151,15 +159,22 @@ npm.cmd install
 npm.cmd run dev
 ```
 
-Trong app:
+Lưu ý: `npm.cmd install` và `npm.cmd run dev` phải chạy trong `desktop-app`, không chạy ở root `D:\Lexicon`.
 
-1. Nhập vault path.
+## Sử dụng trong app
+
+1. Nhập vault path, ví dụ `D:\Lexicon\.tmp\e2e-vault`.
 2. Bấm `Load`.
-3. Kiểm tra System Health: `ai_provider: ok`, `mineru: ok` nếu dùng MinerU, `requests: ok`.
-4. Ingest file/text/url.
-5. Review item trong Review Queue.
-6. Chọn folder `concepts`, `guidelines`, hoặc `references`.
-7. Approve để commit vào vault và rebuild index.
+3. Vào `Settings` kiểm tra System Health:
+   - `ai_provider: ok` nếu AI endpoint hoạt động.
+   - `mineru: ok` nếu MinerU đang chạy.
+   - `requests: ok`.
+4. Vào `Settings` -> `Vault Agent`, bấm `Reload agent.md` hoặc `Create/load template`.
+5. Vào `Dashboard` hoặc `Review`, dùng Add Source để ingest text/file/image/url.
+6. Vào `Review`, sửa Markdown, xử lý duplicate, rồi approve.
+7. Vào `Workspace` để đọc/search note đã commit.
+8. Vào `Chat` để hỏi vault và có thể lưu answer vào review queue.
+9. Vào `Decay` để kiểm tra/cập nhật note quá hạn.
 
 ## CLI workflow nhanh
 
@@ -167,6 +182,12 @@ Tạo vault:
 
 ```powershell
 python -m lexicon.cli init-vault .\demo-vault --name "Demo Vault"
+```
+
+Đọc hoặc sửa agent:
+
+```powershell
+python -m lexicon.cli agent --vault .\demo-vault --json
 ```
 
 Ingest text:
@@ -210,16 +231,17 @@ python -m lexicon.cli decay --vault .\demo-vault
 ## Kiến trúc
 
 ```text
-Source file/text/url
+Source file/text/url/image
   -> Extractor Router
   -> MinerU / pdftotext / MarkItDown / HTTP fallback
   -> Raw Markdown
   -> AI Processor + agent.md
   -> _inbox review item
   -> Human review
-  -> Commit to vault
+  -> Duplicate decision
+  -> Commit or merge into vault
   -> Rebuild index
-  -> Chat/Search/Decay
+  -> Workspace / Chat / Decay
 ```
 
 Desktop app không xử lý domain logic trực tiếp:
@@ -237,19 +259,19 @@ Electron/React UI
 src/lexicon/
 |- cli.py                  # CLI + JSON bridge cho desktop app
 |- config.py               # app config, vault registry
-|- vault.py                # thao tác filesystem vault
+|- vault.py                # thao tác filesystem vault + agent.md
 |- ingestion.py            # source -> review item
-|- review.py               # inbox approve/reject/show
+|- review.py               # inbox approve/reject/merge/show
 |- chat.py                 # vault chat orchestration
 |- search.py               # local chunk index + retrieval
 |- decay.py                # stale/expired knowledge scan
+|- workspace.py            # list/read/search committed notes
 |- ai/                     # AI provider adapters
-`- extractors/             # text/url/pdf/MinerU/MarkItDown adapters
+`- extractors/             # text/url/pdf/image/MinerU adapters
 
 desktop-app/               # Electron + React UI
 docs/                      # architecture notes
 tests/                     # Python tests
-obsidian-plugin/           # optional compatibility scaffold
 ```
 
 ## Người khác clone về cần làm gì?
@@ -258,8 +280,8 @@ obsidian-plugin/           # optional compatibility scaffold
 2. Tạo Python venv và chạy `pip install -e .[dev]`.
 3. Tạo `.env` từ `.env.example`.
 4. Cấu hình API AI hoặc local LLM endpoint.
-5. Nếu dùng PDF scan, cài MinerU riêng và chạy `mineru-api`.
-6. Cài desktop dependencies bằng `npm.cmd install`.
+5. Nếu dùng PDF/image OCR, cài MinerU riêng và chạy `mineru-api`.
+6. Cài desktop dependencies bằng `npm.cmd install` trong `desktop-app`.
 7. Chạy `npm.cmd run dev` trong `desktop-app`.
 
 Không cần clone/copy folder MinerU từ máy người phát triển. MinerU là runtime service riêng, giống database/service local.
@@ -267,8 +289,10 @@ Không cần clone/copy folder MinerU từ máy người phát triển. MinerU l
 ## Kiểm tra trước khi commit
 
 ```powershell
+cd D:\Lexicon
 pytest -q
-cd desktop-app
+
+cd D:\Lexicon\desktop-app
 npm.cmd run typecheck
 npm.cmd run build
 ```

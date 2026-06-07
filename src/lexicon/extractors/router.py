@@ -11,6 +11,7 @@ from .text import extract_text
 from .url import extract_url
 
 MARKITDOWN_SUFFIXES = {".docx", ".pptx", ".xlsx", ".xls", ".html", ".htm", ".csv"}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 
 
 def extract(source: SourceInput, config: AppConfig | None = None) -> ExtractedContent:
@@ -61,6 +62,29 @@ def extract_file_source(source: SourceInput, config: AppConfig) -> ExtractedCont
                 extracted.confidence = min(extracted.confidence, 0.55)
                 return extracted
         return extract_pdf(source)
+    if suffix in IMAGE_SUFFIXES:
+        if config.mineru_endpoint:
+            try:
+                from .mineru import extract_with_mineru
+
+                return extract_with_mineru(source, config.mineru_endpoint, config.mineru_timeout_seconds)
+            except Exception as exc:
+                return ExtractedContent(
+                    markdown=f"# {source.title or path.stem}\n\nSource: {path}\n\n![]({path})\n",
+                    source_label=str(path),
+                    assets=[path.expanduser().resolve()],
+                    warnings=[f"MinerU image extraction failed; stored the source image for manual review: {exc}"],
+                    confidence=0.35,
+                    metadata={"extractor": "image-fallback"},
+                )
+        return ExtractedContent(
+            markdown=f"# {source.title or path.stem}\n\nSource: {path}\n\n![]({path})\n",
+            source_label=str(path),
+            assets=[path.expanduser().resolve()],
+            warnings=["Image file was added without OCR because MinerU is not configured."],
+            confidence=0.3,
+            metadata={"extractor": "image-fallback"},
+        )
     if suffix in {".md", ".txt"}:
         return extract_text(source)
     if suffix in MARKITDOWN_SUFFIXES or config.file_extractor == "markitdown":

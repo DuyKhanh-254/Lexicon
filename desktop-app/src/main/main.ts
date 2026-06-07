@@ -15,7 +15,9 @@ type LexiconCommand =
   | "scan"
   | "chat"
   | "ingest"
-  | "init-vault";
+  | "agent"
+  | "init-vault"
+  | "workspace";
 
 const allowedCommands = new Set<LexiconCommand>([
   "settings",
@@ -25,7 +27,9 @@ const allowedCommands = new Set<LexiconCommand>([
   "scan",
   "chat",
   "ingest",
-  "init-vault"
+  "agent",
+  "init-vault",
+  "workspace"
 ]);
 
 function repoRoot(): string {
@@ -43,30 +47,7 @@ function pythonExecutable(root: string): string {
   return fs.existsSync(candidate) ? candidate : "python";
 }
 
-function createWindow() {
-  const window = new BrowserWindow({
-    width: 1180,
-    height: 780,
-    minWidth: 980,
-    minHeight: 640,
-    title: "Lexicon",
-    backgroundColor: "#f7f5ef",
-    webPreferences: {
-      preload: path.join(__dirname, "..", "preload", "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  });
-
-  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devServerUrl) {
-    void window.loadURL(devServerUrl);
-  } else {
-    void window.loadFile(path.join(desktopRoot(), "dist-renderer", "index.html"));
-  }
-}
-
-ipcMain.handle("lexicon:run", async (_event, command: LexiconCommand, args: string[] = []) => {
+function runLexicon(command: LexiconCommand, args: string[] = []) {
   if (!allowedCommands.has(command)) {
     throw new Error(`Unsupported Lexicon command: ${command}`);
   }
@@ -108,6 +89,33 @@ ipcMain.handle("lexicon:run", async (_event, command: LexiconCommand, args: stri
       }
     });
   });
+}
+
+function createWindow() {
+  const window = new BrowserWindow({
+    width: 1180,
+    height: 780,
+    minWidth: 980,
+    minHeight: 640,
+    title: "Lexicon",
+    backgroundColor: "#f7f5ef",
+    webPreferences: {
+      preload: path.join(__dirname, "..", "preload", "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+  if (devServerUrl) {
+    void window.loadURL(devServerUrl);
+  } else {
+    void window.loadFile(path.join(desktopRoot(), "dist-renderer", "index.html"));
+  }
+}
+
+ipcMain.handle("lexicon:run", async (_event, command: LexiconCommand, args: string[] = []) => {
+  return runLexicon(command, args);
 });
 
 ipcMain.handle("dialog:selectFile", async () => {

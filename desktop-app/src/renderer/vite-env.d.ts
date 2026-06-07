@@ -9,7 +9,9 @@ declare global {
     | "scan"
     | "chat"
     | "ingest"
-    | "init-vault";
+    | "agent"
+    | "init-vault"
+    | "workspace";
 
   interface Window {
     lexicon: {

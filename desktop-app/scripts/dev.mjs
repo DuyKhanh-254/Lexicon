@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 
 const children = [];
@@ -11,6 +11,17 @@ function run(command, args, options = {}) {
   });
   children.push(child);
   return child;
+}
+
+function runChecked(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    stdio: "inherit",
+    shell: process.platform === "win32",
+    ...options
+  });
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
 }
 
 function waitForPort(port, host = "127.0.0.1", timeoutMs = 30000) {
@@ -48,6 +59,7 @@ process.on("SIGTERM", () => {
   process.exit(143);
 });
 
+runChecked("npx", ["tsc", "-p", "tsconfig.electron.json"]);
 run("npx", ["tsc", "-p", "tsconfig.electron.json", "--watch", "--preserveWatchOutput"]);
 run("npx", ["vite", "--host", "127.0.0.1"]);
 

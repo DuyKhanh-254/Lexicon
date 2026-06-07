@@ -8,7 +8,9 @@ type LexiconCommand =
   | "scan"
   | "chat"
   | "ingest"
-  | "init-vault";
+  | "agent"
+  | "init-vault"
+  | "workspace";
 
 const api = {
   run(command: LexiconCommand, args: string[] = []) {

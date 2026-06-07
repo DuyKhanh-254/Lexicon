@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import importlib.util
 import json
 import socket
@@ -11,12 +12,13 @@ from urllib.parse import urlparse
 
 from .chat import answer, save_answer_to_inbox
 from .config import AppConfig, VaultRegistry
-from .decay import DecayInfo, scan_decay
+from .decay import DecayInfo, scan_decay, update_decay_metadata
 from .ingestion import ingest
 from .models import SourceInput
-from .review import InboxItem, approve, get_inbox_detail, inbox_details, reject
+from .review import InboxItem, approve, get_inbox_detail, inbox_details, merge_inbox_into_note, reject, replace_inbox_body
 from .search import rebuild_index
-from .vault import Vault
+from .vault import DEFAULT_AGENT, Vault
+from .workspace import WorkspaceNote, list_notes, read_note, search_notes
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,6 +42,13 @@ def build_parser() -> argparse.ArgumentParser:
     settings.add_argument("--file-extractor", choices=["auto", "markitdown"])
     settings.add_argument("--json", action="store_true")
 
+    agent = sub.add_parser("agent")
+    agent.add_argument("--vault", required=True)
+    agent.add_argument("--init", action="store_true")
+    agent.add_argument("--body-file")
+    agent.add_argument("--body-base64")
+    agent.add_argument("--json", action="store_true")
+
     ingest_cmd = sub.add_parser("ingest")
     ingest_cmd.add_argument("--vault", required=True)
     group = ingest_cmd.add_mutually_exclusive_group(required=True)
@@ -55,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
     inbox.add_argument("--approve", type=int)
     inbox.add_argument("--reject", type=int)
     inbox.add_argument("--show", type=int)
+    inbox.add_argument("--replace-body", type=int)
+    inbox.add_argument("--merge-into", type=int)
+    inbox.add_argument("--target")
+    inbox.add_argument("--body-file")
+    inbox.add_argument("--body-base64")
     inbox.add_argument("--folder")
     inbox.add_argument("--json", action="store_true")
 
@@ -70,10 +84,22 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--vault", required=True)
     scan.add_argument("--json", action="store_true")
 
+    workspace = sub.add_parser("workspace")
+    workspace.add_argument("--vault", required=True)
+    workspace.add_argument("--query")
+    workspace.add_argument("--search")
+    workspace.add_argument("--read")
+    workspace.add_argument("--limit", type=int, default=10)
+    workspace.add_argument("--json", action="store_true")
+
     decay = sub.add_parser("decay")
     decay.add_argument("--vault", required=True)
     decay.add_argument("--days", type=int, default=30)
     decay.add_argument("--all", action="store_true")
+    decay.add_argument("--update")
+    decay.add_argument("--reviewed-at")
+    decay.add_argument("--expires-at")
+    decay.add_argument("--extend-days", type=int)
     decay.add_argument("--json", action="store_true")
 
     doctor = sub.add_parser("doctor")
@@ -123,6 +149,26 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print_json(config_to_dict(config))
             return 0
+        if args.command == "agent":
+            vault = _open_vault_for_agent(args.vault, init=args.init)
+            if args.body_base64 or args.body_file:
+                if args.body_base64:
+                    body = base64.b64decode(args.body_base64.encode("ascii")).decode("utf-8")
+                else:
+                    body = Path(args.body_file).read_text(encoding="utf-8-sig")
+                target = vault.write_agent(body)
+                payload = {"ok": True, "agent": agent_to_dict(vault), "updated": str(target)}
+                if args.json:
+                    print_json(payload)
+                    return 0
+                print(f"Updated agent: {target}")
+                return 0
+            payload = {"ok": True, "agent": agent_to_dict(vault)}
+            if args.json:
+                print_json(payload)
+                return 0
+            print(vault.read_agent())
+            return 0
         if args.command == "ingest":
             vault = Vault.open(args.vault)
             if args.url:
@@ -139,6 +185,20 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "inbox":
             vault = Vault.open(args.vault)
+            if args.replace_body:
+                if args.body_base64:
+                    body = base64.b64decode(args.body_base64.encode("ascii")).decode("utf-8")
+                elif args.body_file:
+                    body = Path(args.body_file).read_text(encoding="utf-8-sig")
+                else:
+                    raise ValueError("--body-file or --body-base64 is required with --replace-body")
+                target = replace_inbox_body(vault, args.replace_body, body)
+                item = get_inbox_detail(vault, args.replace_body)
+                if args.json:
+                    print_json({"ok": True, "updated": str(target), "item": inbox_item_to_dict(item)})
+                    return 0
+                print(f"Updated: {target}")
+                return 0
             if args.show:
                 item = get_inbox_detail(vault, args.show)
                 if args.json:
@@ -162,6 +222,23 @@ def main(argv: list[str] | None = None) -> int:
                     return 0
                 print(f"Approved: {target}")
                 print(f"Folder: {folder_note}")
+                return 0
+            if args.merge_into:
+                if not args.target:
+                    raise ValueError("--target is required with --merge-into")
+                item = get_inbox_detail(vault, args.merge_into)
+                target = merge_inbox_into_note(vault, args.merge_into, args.target)
+                if args.json:
+                    print_json(
+                        {
+                            "ok": True,
+                            "merged": str(target),
+                            "target": target.relative_to(vault.path).as_posix(),
+                            "item": inbox_item_to_dict(item),
+                        }
+                    )
+                    return 0
+                print(f"Merged: {item.path.name} -> {target}")
                 return 0
             if args.reject:
                 item = get_inbox_detail(vault, args.reject)
@@ -212,8 +289,51 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             print(f"Rebuilt index: {target}")
             return 0
+        if args.command == "workspace":
+            vault = Vault.open(args.vault)
+            if args.read:
+                note = read_note(vault, args.read)
+                if args.json:
+                    print_json({"ok": True, "note": note})
+                    return 0
+                print(format_workspace_note(note))
+                return 0
+            if args.search:
+                hits = search_notes(vault, args.search, limit=args.limit)
+                if args.json:
+                    print_json({"ok": True, "hits": hits})
+                    return 0
+                print(format_workspace_hits(hits))
+                return 0
+            notes = list_notes(vault, query=args.query)
+            if args.json:
+                print_json({"ok": True, "notes": [workspace_note_to_dict(note) for note in notes]})
+                return 0
+            print(format_workspace_list(notes))
+            return 0
         if args.command == "decay":
             vault = Vault.open(args.vault)
+            if args.update:
+                info = update_decay_metadata(
+                    vault,
+                    args.update,
+                    reviewed_at=args.reviewed_at,
+                    expires_at=args.expires_at,
+                    extend_days=args.extend_days,
+                )
+                warnings = []
+                try:
+                    rebuild_index(vault)
+                    vault.rebuild_index()
+                except Exception as exc:
+                    warnings.append(f"Decay metadata updated, but index rebuild failed: {exc}")
+                if args.json:
+                    print_json({"ok": True, "item": decay_info_to_dict(info), "warnings": warnings})
+                    return 0
+                print(f"Updated decay metadata: {info.path}")
+                for warning in warnings:
+                    print(f"Warning: {warning}")
+                return 0
             rows = scan_decay(vault, due_soon_days=args.days, include_fresh=args.all)
             if args.json:
                 print_json({"ok": True, "items": [decay_info_to_dict(row) for row in rows]})
@@ -267,6 +387,19 @@ def config_to_dict(config: AppConfig) -> dict:
     }
 
 
+def agent_to_dict(vault: Vault) -> dict:
+    agent_path = vault.path / "agent.md"
+    body = vault.read_agent()
+    return {
+        "path": str(agent_path),
+        "filename": agent_path.name,
+        "exists": agent_path.exists(),
+        "body": body,
+        "line_count": len(body.splitlines()),
+        "vault": str(vault.path),
+    }
+
+
 def inbox_item_to_dict(item: InboxItem) -> dict:
     return {
         "index": item.index,
@@ -278,6 +411,18 @@ def inbox_item_to_dict(item: InboxItem) -> dict:
         "confidence": item.confidence,
         "warnings": item.warnings,
         "body_preview": item.body_preview,
+        "body": item.body,
+    }
+
+
+def workspace_note_to_dict(note: WorkspaceNote) -> dict:
+    return {
+        "path": note.path,
+        "title": note.title,
+        "folder": note.folder,
+        "size": note.size,
+        "modified_at": note.modified_at,
+        "preview": note.preview,
     }
 
 
@@ -297,6 +442,37 @@ Warnings:
 Preview:
 {item.body_preview}
 """
+
+
+def format_workspace_list(notes: list[WorkspaceNote]) -> str:
+    if not notes:
+        return "No workspace notes."
+    lines = ["Folder       Note"]
+    for note in notes:
+        lines.append(f"{note.folder or '-':<12} {note.path}")
+    return "\n".join(lines)
+
+
+def format_workspace_note(note: dict) -> str:
+    frontmatter = note.get("frontmatter") or {}
+    meta = "\n".join(f"{key}: {value}" for key, value in frontmatter.items())
+    return f"""Title: {note.get("title")}
+Path: {note.get("path")}
+Folder: {note.get("folder")}
+
+{meta}
+
+{note.get("body", "")}
+"""
+
+
+def format_workspace_hits(hits: list[dict]) -> str:
+    if not hits:
+        return "No search hits."
+    lines = ["Score   Note"]
+    for hit in hits:
+        lines.append(f"{hit.get('score', 0):<7} {hit.get('path', '')} :: {hit.get('heading', '')}")
+    return "\n".join(lines)
 
 
 def format_doctor(config: AppConfig) -> str:
@@ -387,6 +563,17 @@ def _tcp_service_status(url: str | None) -> str:
             return "ok"
     except OSError as exc:
         return f"unreachable: {exc}"
+
+
+def _open_vault_for_agent(vault_path: str, init: bool = False) -> Vault:
+    path = Path(vault_path).expanduser().resolve()
+    if init:
+        path.mkdir(parents=True, exist_ok=True)
+        agent_path = path / "agent.md"
+        if not agent_path.exists():
+            title = path.name or "vault"
+            agent_path.write_text(DEFAULT_AGENT.replace("# Agent", f"# Agent - {title}"), encoding="utf-8")
+    return Vault.open(path)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,11 @@ desktop-app/dist-renderer/
 desktop-app/node_modules/
 
 .tmp/
+test-runs/
 .env
 .lexicon/
+/.agents/
+/skills-lock.json
+/package-lock.json
 lexicon_page-*.png
 Lexicon_v1.3.txt

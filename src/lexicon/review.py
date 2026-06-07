@@ -17,6 +17,7 @@ class InboxItem:
     confidence: float | None
     warnings: list[str]
     body_preview: str
+    body: str
 
 
 def inbox_items(vault: Vault) -> list[Path]:
@@ -41,6 +42,7 @@ def read_inbox_item(index: int, path: Path) -> InboxItem:
         confidence=_parse_float(frontmatter.get("confidence")),
         warnings=warnings,
         body_preview=preview_body(body),
+        body=body,
     )
 
 
@@ -60,6 +62,34 @@ def approve(vault: Vault, index: int, folder: str | None = None) -> Path:
     return target
 
 
+def merge_inbox_into_note(vault: Vault, index: int, target: str | Path) -> Path:
+    items = inbox_items(vault)
+    if index < 1 or index > len(items):
+        raise IndexError(f"Inbox item index out of range: {index}")
+
+    inbox_file = items[index - 1]
+    target_path = _resolve_committed_note(vault, target)
+    item = read_inbox_item(index, inbox_file)
+    target_text = target_path.read_text(encoding="utf-8-sig").rstrip()
+    incoming = _body_without_review(item.body)
+    merged = "\n\n".join(
+        part
+        for part in [
+            target_text,
+            "## Merged review item",
+            f"**Title:** {item.title}",
+            f"**Source:** {item.source or 'unknown'}",
+            incoming,
+        ]
+        if part.strip()
+    )
+    target_path.write_text(merged.rstrip() + "\n", encoding="utf-8")
+    inbox_file.unlink()
+    vault.rebuild_index()
+    rebuild_index(vault)
+    return target_path
+
+
 def reject(vault: Vault, index: int) -> Path:
     items = inbox_items(vault)
     if index < 1 or index > len(items):
@@ -67,6 +97,44 @@ def reject(vault: Vault, index: int) -> Path:
     target = items[index - 1]
     target.unlink()
     return target
+
+
+def replace_inbox_body(vault: Vault, index: int, body: str) -> Path:
+    items = inbox_items(vault)
+    if index < 1 or index > len(items):
+        raise IndexError(f"Inbox item index out of range: {index}")
+    target = items[index - 1]
+    text = target.read_text(encoding="utf-8-sig")
+    prefix = ""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            prefix = text[: end + 4].rstrip() + "\n\n"
+    clean_body = body.strip()
+    target.write_text(prefix + clean_body + "\n", encoding="utf-8")
+    return target
+
+
+def _resolve_committed_note(vault: Vault, target: str | Path) -> Path:
+    target_path = Path(target)
+    if not target_path.is_absolute():
+        target_path = vault.path / target_path
+    resolved = target_path.resolve()
+    vault_root = vault.path.resolve()
+    if vault_root not in resolved.parents:
+        raise ValueError(f"Target note is outside the vault: {target}")
+    rel_parts = set(resolved.relative_to(vault_root).parts)
+    if rel_parts.intersection({"_inbox", "_assets", "_trash", ".obsidian"}):
+        raise ValueError(f"Target note must be a committed vault note: {target}")
+    if resolved.suffix.lower() != ".md":
+        raise ValueError(f"Target note must be Markdown: {target}")
+    if not resolved.exists():
+        raise FileNotFoundError(f"Target note does not exist: {target}")
+    return resolved
+
+
+def _body_without_review(body: str) -> str:
+    return body.split("## Lexicon review", 1)[0].strip()
 
 
 def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
