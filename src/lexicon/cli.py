@@ -30,6 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--name")
     init.add_argument("--json", action="store_true")
 
+    vaults = sub.add_parser("vaults")
+    vaults.add_argument("--remove")
+    vaults.add_argument("--json", action="store_true")
+
     settings = sub.add_parser("settings")
     settings.add_argument("--provider")
     settings.add_argument("--model")
@@ -89,6 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     workspace.add_argument("--query")
     workspace.add_argument("--search")
     workspace.add_argument("--read")
+    workspace.add_argument("--include-connected", action="store_true")
     workspace.add_argument("--limit", type=int, default=10)
     workspace.add_argument("--json", action="store_true")
 
@@ -118,6 +123,22 @@ def main(argv: list[str] | None = None) -> int:
                 print_json({"ok": True, "vault": str(vault.path), "name": args.name or vault.path.name})
                 return 0
             print(f"Initialized vault: {vault.path}")
+            return 0
+        if args.command == "vaults":
+            vault_registry = VaultRegistry()
+            if args.remove:
+                removed = vault_registry.remove(args.remove)
+                if args.json:
+                    print_json({"ok": True, "removed": args.remove, "path": removed})
+                    return 0
+                print(f"Removed vault registry entry: {args.remove}" if removed else f"Vault registry entry not found: {args.remove}")
+                return 0
+            registry = vault_registry.list()
+            items = [vault_registry_item_to_dict(name, path) for name, path in sorted(registry.items())]
+            if args.json:
+                print_json({"ok": True, "vaults": items})
+                return 0
+            print(format_vault_registry(items))
             return 0
         if args.command == "settings":
             config = AppConfig.load()
@@ -299,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_workspace_note(note))
                 return 0
             if args.search:
-                hits = search_notes(vault, args.search, limit=args.limit)
+                hits = search_notes(vault, args.search, limit=args.limit, include_connected=args.include_connected)
                 if args.json:
                     print_json({"ok": True, "hits": hits})
                     return 0
@@ -424,6 +445,56 @@ def workspace_note_to_dict(note: WorkspaceNote) -> dict:
         "modified_at": note.modified_at,
         "preview": note.preview,
     }
+
+
+def vault_registry_item_to_dict(name: str, vault_path: str) -> dict:
+    path = Path(vault_path).expanduser()
+    item: dict = {
+        "name": name,
+        "path": str(path),
+        "exists": path.exists(),
+        "agent_exists": (path / "agent.md").exists(),
+        "notes_count": 0,
+        "inbox_count": 0,
+        "expired_count": 0,
+        "due_soon_count": 0,
+        "status": "missing",
+    }
+    if not path.exists():
+        item["error"] = "Vault path does not exist."
+        return item
+    if not item["agent_exists"]:
+        item["status"] = "missing-agent"
+        item["error"] = "Missing agent.md."
+        return item
+    try:
+        vault = Vault.open(path)
+        decay_items = scan_decay(vault)
+        item.update(
+            {
+                "notes_count": len(list_notes(vault)),
+                "inbox_count": len(inbox_details(vault)),
+                "expired_count": sum(1 for entry in decay_items if entry.status == "expired"),
+                "due_soon_count": sum(1 for entry in decay_items if entry.status in {"due_soon", "due-soon"}),
+                "status": "ok",
+            }
+        )
+    except Exception as exc:
+        item["status"] = "error"
+        item["error"] = str(exc)
+    return item
+
+
+def format_vault_registry(items: list[dict]) -> str:
+    if not items:
+        return "No registered vaults."
+    lines = ["Registered vaults:"]
+    for item in items:
+        lines.append(
+            f"- {item['name']}: {item['path']} "
+            f"({item['status']}, notes={item['notes_count']}, inbox={item['inbox_count']}, expired={item['expired_count']})"
+        )
+    return "\n".join(lines)
 
 
 def format_inbox_detail(item: InboxItem) -> str:

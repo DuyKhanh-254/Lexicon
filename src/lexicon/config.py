@@ -82,5 +82,10 @@ class VaultRegistry:
         self.data[name] = str(vault_path.expanduser().resolve())
         _write_json(self.path, self.data)
 
+    def remove(self, name: str) -> str | None:
+        removed = self.data.pop(name, None)
+        _write_json(self.path, self.data)
+        return removed
+
     def list(self) -> dict[str, str]:
         return dict(self.data)

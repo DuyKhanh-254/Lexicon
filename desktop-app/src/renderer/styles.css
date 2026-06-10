@@ -730,6 +730,29 @@ textarea {
   margin-top: 12px;
 }
 
+.runtime-mini-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+
+.runtime-mini-panel strong,
+.runtime-mini-panel span {
+  display: block;
+}
+
+.runtime-mini-panel span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .setup-agent-toolbar {
   justify-content: flex-start;
 }
@@ -743,6 +766,84 @@ textarea {
   align-self: stretch;
 }
 
+.vault-manager-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 0.75fr) minmax(680px, 1.25fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.vault-create-panel,
+.vault-registry-panel {
+  min-width: 0;
+}
+
+.vault-card-list {
+  display: grid;
+  gap: 12px;
+  max-height: 720px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.vault-manager-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fffefa;
+  padding: 14px;
+}
+
+.vault-manager-card.active {
+  border-color: var(--accent);
+  background: #f2faf6;
+}
+
+.vault-manager-card-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.vault-manager-card-main h3 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.vault-manager-card-main span,
+.vault-manager-card-main small {
+  display: block;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.vault-manager-card-main small {
+  margin-top: 5px;
+  color: var(--danger);
+}
+
+.vault-metrics-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.vault-metrics-row .metric {
+  min-height: 74px;
+  padding: 10px;
+  box-shadow: none;
+}
+
+.vault-metrics-row .metric strong {
+  font-size: 18px;
+}
+
+.vault-manager-actions {
+  justify-content: flex-end;
+}
+
 .settings-form-panel {
   min-width: 0;
 }
@@ -753,13 +854,35 @@ textarea {
 
 .system-health-panel,
 .setup-notes-panel,
+.mineru-runtime-panel,
 .agent-panel {
   min-width: 0;
 }
 
 .setup-notes-panel,
+.mineru-runtime-panel,
 .agent-panel {
   grid-column: 1 / -1;
+}
+
+.runtime-log {
+  max-height: 180px;
+  overflow: auto;
+  margin: 12px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffefa;
+  padding: 12px;
+  color: #33413d;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.runtime-log.danger {
+  border-color: #efb09c;
+  background: #fff1ed;
+  color: #7d2f1f;
 }
 
 .agent-toolbar {

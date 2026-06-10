@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
@@ -17,6 +17,7 @@ type LexiconCommand =
   | "ingest"
   | "agent"
   | "init-vault"
+  | "vaults"
   | "workspace";
 
 const allowedCommands = new Set<LexiconCommand>([
@@ -29,8 +30,32 @@ const allowedCommands = new Set<LexiconCommand>([
   "ingest",
   "agent",
   "init-vault",
+  "vaults",
   "workspace"
 ]);
+
+let mineruProcess: ChildProcessWithoutNullStreams | null = null;
+let mineruRuntime = {
+  command: "",
+  args: [] as string[],
+  cwd: "",
+  pid: null as number | null,
+  lastOutput: "",
+  lastError: "",
+  exitCode: null as number | null
+};
+
+function mineruStatus() {
+  return {
+    running: Boolean(mineruProcess && !mineruProcess.killed && mineruRuntime.exitCode === null),
+    ...mineruRuntime
+  };
+}
+
+function rememberMineruOutput(kind: "lastOutput" | "lastError", chunk: Buffer) {
+  const next = `${mineruRuntime[kind]}${chunk.toString("utf8")}`;
+  mineruRuntime[kind] = next.slice(-4000);
+}
 
 function repoRoot(): string {
   return process.env.LEXICON_REPO_ROOT || path.resolve(desktopRoot(), "..");
@@ -142,10 +167,69 @@ ipcMain.handle("dialog:selectFile", async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+ipcMain.handle("dialog:selectDirectory", async () => {
+  const result = await dialog.showOpenDialog({
+    title: "Select vault folder",
+    properties: ["openDirectory", "createDirectory"]
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("mineru:status", async () => mineruStatus());
+
+ipcMain.handle("mineru:start", async (_event, options: { command?: string; args?: string[]; cwd?: string } = {}) => {
+  if (mineruProcess && mineruRuntime.exitCode === null) return mineruStatus();
+  const command = options.command?.trim();
+  if (!command) throw new Error("MinerU command is required.");
+  const args = options.args ?? [];
+  const cwd = options.cwd?.trim() || undefined;
+  mineruRuntime = {
+    command,
+    args,
+    cwd: cwd ?? "",
+    pid: null,
+    lastOutput: "",
+    lastError: "",
+    exitCode: null
+  };
+  mineruProcess = spawn(command, args, {
+    cwd,
+    windowsHide: true,
+    shell: false
+  });
+  mineruRuntime.pid = mineruProcess.pid ?? null;
+  mineruProcess.stdout.on("data", (chunk: Buffer) => rememberMineruOutput("lastOutput", chunk));
+  mineruProcess.stderr.on("data", (chunk: Buffer) => rememberMineruOutput("lastError", chunk));
+  mineruProcess.on("error", (error) => {
+    mineruRuntime.lastError = `${mineruRuntime.lastError}\n${error.message}`.trim().slice(-4000);
+    mineruRuntime.exitCode = -1;
+    mineruProcess = null;
+  });
+  mineruProcess.on("close", (code) => {
+    mineruRuntime.exitCode = code;
+    mineruProcess = null;
+  });
+  return mineruStatus();
+});
+
+ipcMain.handle("mineru:stop", async () => {
+  if (mineruProcess && mineruRuntime.exitCode === null) {
+    mineruProcess.kill();
+  }
+  mineruProcess = null;
+  mineruRuntime.exitCode = mineruRuntime.exitCode ?? 0;
+  return mineruStatus();
+});
+
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {
+  if (mineruProcess && mineruRuntime.exitCode === null) mineruProcess.kill();
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  if (mineruProcess && mineruRuntime.exitCode === null) mineruProcess.kill();
 });
 
 app.on("activate", () => {

@@ -5,7 +5,7 @@ import "./styles.css";
 
 type SourceMode = "text" | "file" | "image" | "url";
 type KnowledgeFolder = "concepts" | "guidelines" | "references";
-type ActiveView = "setup" | "dashboard" | "workspace" | "chat" | "review" | "decay" | "settings";
+type ActiveView = "setup" | "vaults" | "dashboard" | "workspace" | "chat" | "review" | "decay" | "settings";
 type KnowledgeMode = "vault-only" | "vault+model" | "vault+web";
 type DuplicateDecision = "keep" | "link" | "merge";
 
@@ -72,11 +72,17 @@ type WorkspaceSearchHit = {
   heading: string;
   score: number;
   snippet: string;
+  vault_name?: string;
+  vault_path?: string;
+  external?: boolean;
 };
 
 type WorkspaceSelectedNote = WorkspaceNote & {
   frontmatter: Record<string, string>;
   body: string;
+  vault_name?: string;
+  vault_path?: string;
+  external?: boolean;
 };
 
 type ChatResult = {
@@ -101,6 +107,30 @@ type AgentPayload = {
   vault: string;
 };
 
+type VaultSummary = {
+  name: string;
+  path: string;
+  exists: boolean;
+  agent_exists: boolean;
+  notes_count: number;
+  inbox_count: number;
+  expired_count: number;
+  due_soon_count: number;
+  status: string;
+  error?: string;
+};
+
+type MineruRuntimeStatus = {
+  running: boolean;
+  command: string;
+  args: string[];
+  cwd: string;
+  pid: number | null;
+  lastOutput: string;
+  lastError: string;
+  exitCode: number | null;
+};
+
 function lexiconApi() {
   if (!window.lexicon) {
     throw new Error("Lexicon desktop bridge is not loaded. Restart the app after building, then try again.");
@@ -117,6 +147,11 @@ function App() {
   const [vaultPath, setVaultPath] = useState(() => localStorage.getItem("lexicon.vaultPath") ?? "");
   const [setupVaultName, setSetupVaultName] = useState("Lexicon Vault");
   const [setupResult, setSetupResult] = useState<string | null>(null);
+  const [vaults, setVaults] = useState<VaultSummary[]>([]);
+  const [vaultManagerName, setVaultManagerName] = useState("Lexicon Vault");
+  const [vaultManagerPath, setVaultManagerPath] = useState(() => localStorage.getItem("lexicon.vaultPath") ?? "");
+  const [vaultManagerResult, setVaultManagerResult] = useState<string | null>(null);
+  const [vaultsBusy, setVaultsBusy] = useState(false);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [decay, setDecay] = useState<DecayItem[]>([]);
   const [vaultNoteCount, setVaultNoteCount] = useState<number | null>(null);
@@ -160,6 +195,15 @@ function App() {
   const [settingsFileExtractor, setSettingsFileExtractor] = useState("auto");
   const [mineruEndpoint, setMineruEndpoint] = useState("");
   const [mineruTimeoutSeconds, setMineruTimeoutSeconds] = useState("900");
+  const [mineruCommand, setMineruCommand] = useState(() =>
+    localStorage.getItem("lexicon.mineruCommand") ?? "D:\\MinerU\\.venv\\Scripts\\mineru-api.exe"
+  );
+  const [mineruArgsText, setMineruArgsText] = useState(() =>
+    localStorage.getItem("lexicon.mineruArgs") ?? "--host 127.0.0.1 --port 8888"
+  );
+  const [mineruCwd, setMineruCwd] = useState(() => localStorage.getItem("lexicon.mineruCwd") ?? "D:\\MinerU");
+  const [mineruRuntime, setMineruRuntime] = useState<MineruRuntimeStatus | null>(null);
+  const [mineruRuntimeResult, setMineruRuntimeResult] = useState<string | null>(null);
   const [ingestResult, setIngestResult] = useState<string | null>(null);
   const [ingestStep, setIngestStep] = useState<string | null>(null);
   const [settingsResult, setSettingsResult] = useState<string | null>(null);
@@ -171,19 +215,25 @@ function App() {
   const [ingestBusy, setIngestBusy] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
+  const [mineruRuntimeBusy, setMineruRuntimeBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const staleCount = decay.filter((item) => item.status === "expired").length;
   const dueSoonCount = decay.filter((item) => item.status === "due_soon" || item.status === "due-soon").length;
   const mineruReady = Boolean(settings?.mineru_endpoint) && doctor?.dependencies.requests === "ok";
+  const mineruEndpointReachable = doctor?.services?.mineru === "ok";
+  const mineruManagedRunning = Boolean(mineruRuntime?.running);
   const selectedFileIsPdf = sourceFile.toLowerCase().endsWith(".pdf");
   const selectedFileIsImage = /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(sourceFile);
   const selectedFileUsesMineru = sourceMode === "image" || selectedFileIsPdf;
-  const vaultName = vaultPath.trim().split(/[\\/]/).filter(Boolean).pop() ?? "No vault loaded";
+  const activeVault = vaults.find((item) => normalizePathKey(item.path) === normalizePathKey(vaultPath));
+  const vaultName = activeVault?.name ?? vaultPath.trim().split(/[\\/]/).filter(Boolean).pop() ?? "No vault loaded";
   const viewTitle =
     activeView === "setup"
       ? "First-run setup"
+      : activeView === "vaults"
+        ? "Vault manager"
       : activeView === "workspace"
       ? "Workspace"
       : activeView === "chat"
@@ -260,21 +310,101 @@ function App() {
     }
   }
 
-  async function refreshVault() {
-    if (!vaultPath.trim()) {
+  async function refreshMineruRuntime() {
+    try {
+      const status = await lexiconApi().mineruStatus();
+      setMineruRuntime(mineruEndpointReachable && !status.running ? { ...status, lastError: "" } : status);
+    } catch (err) {
+      reportError(err);
+    }
+  }
+
+  function saveMineruRuntimeDefaults() {
+    localStorage.setItem("lexicon.mineruCommand", mineruCommand.trim());
+    localStorage.setItem("lexicon.mineruArgs", mineruArgsText.trim());
+    localStorage.setItem("lexicon.mineruCwd", mineruCwd.trim());
+    setMineruRuntimeResult("MinerU runtime command saved locally.");
+  }
+
+  async function startMineruRuntime() {
+    setMineruRuntimeBusy(true);
+    setError(null);
+    setMineruRuntimeResult(null);
+    try {
+      saveMineruRuntimeDefaults();
+      const doctorResult = await lexiconApi().run("doctor", ["--json"]);
+      setDoctor(doctorResult.doctor);
+      if (doctorResult.doctor?.services?.mineru === "ok") {
+        const status = await lexiconApi().mineruStatus();
+        setMineruRuntime({ ...status, lastError: "" });
+        setMineruRuntimeResult("MinerU endpoint is already reachable. Lexicon will use the existing service.");
+        return;
+      }
+      const status = await lexiconApi().mineruStart({
+        command: mineruCommand.trim(),
+        args: splitCommandArgs(mineruArgsText),
+        cwd: mineruCwd.trim() || undefined
+      });
+      setMineruRuntime(status);
+      setMineruRuntimeResult(`MinerU process started${status.pid ? `: PID ${status.pid}` : ""}.`);
+      window.setTimeout(() => {
+        refreshAppHealth().catch((err) => reportError(err));
+        refreshMineruRuntime().catch((err) => reportError(err));
+      }, 1200);
+    } catch (err) {
+      reportError(err);
+    } finally {
+      setMineruRuntimeBusy(false);
+    }
+  }
+
+  async function stopMineruRuntime() {
+    setMineruRuntimeBusy(true);
+    setError(null);
+    setMineruRuntimeResult(null);
+    try {
+      const status = await lexiconApi().mineruStop();
+      setMineruRuntime(status);
+      setMineruRuntimeResult("MinerU process stopped.");
+      await refreshAppHealth();
+    } catch (err) {
+      reportError(err);
+    } finally {
+      setMineruRuntimeBusy(false);
+    }
+  }
+
+  async function refreshVaultRegistry() {
+    setVaultsBusy(true);
+    setError(null);
+    try {
+      const result = await lexiconApi().run("vaults", ["--json"]);
+      setVaults(result.vaults ?? []);
+    } catch (err) {
+      reportError(err);
+    } finally {
+      setVaultsBusy(false);
+    }
+  }
+
+  async function refreshVault(pathOverride = vaultPath) {
+    const targetPath = pathOverride.trim();
+    if (!targetPath) {
       setInbox([]);
       setDecay([]);
       setVaultNoteCount(null);
       return;
     }
-    localStorage.setItem("lexicon.vaultPath", vaultPath);
+    localStorage.setItem("lexicon.vaultPath", targetPath);
+    setVaultPath(targetPath);
+    setVaultManagerPath(targetPath);
     setLoading(true);
     setError(null);
     try {
       const [inboxResult, decayResult, workspaceResult] = await Promise.all([
-        lexiconApi().run("inbox", ["--vault", vaultPath, "--json"]),
-        lexiconApi().run("decay", ["--vault", vaultPath, "--json"]),
-        lexiconApi().run("workspace", ["--vault", vaultPath, "--json"])
+        lexiconApi().run("inbox", ["--vault", targetPath, "--json"]),
+        lexiconApi().run("decay", ["--vault", targetPath, "--json"]),
+        lexiconApi().run("workspace", ["--vault", targetPath, "--json"])
       ]);
       setInbox(inboxResult.items ?? []);
       setDecay(decayResult.items ?? []);
@@ -286,7 +416,7 @@ function App() {
         setReviewDirty(false);
         setReviewSaveStatus(null);
       }
-      if (agent && agent.vault !== vaultPath) {
+      if (agent && agent.vault !== targetPath) {
         setAgent(null);
         setAgentBody("");
         setAgentDirty(false);
@@ -312,15 +442,80 @@ function App() {
         const args = [vaultPath.trim(), "--json"];
         if (setupVaultName.trim()) args.splice(1, 0, "--name", setupVaultName.trim());
         await lexiconApi().run("init-vault", args);
+        await refreshVaultRegistry();
       }
       localStorage.setItem("lexicon.vaultPath", vaultPath.trim());
-      await refreshVault();
-      await loadVaultAgent(true);
+      await refreshVault(vaultPath.trim());
+      await loadVaultAgent(true, vaultPath.trim());
       setSetupResult(createVault ? `Vault created and loaded: ${vaultPath.trim()}` : `Vault loaded: ${vaultPath.trim()}`);
     } catch (err) {
       reportError(err);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function createOrRegisterManagedVault() {
+    const path = vaultManagerPath.trim();
+    if (!path) {
+      setError("Set a vault path before creating or registering a vault.");
+      return;
+    }
+    setVaultsBusy(true);
+    setError(null);
+    setVaultManagerResult(null);
+    try {
+      const args = [path, "--json"];
+      if (vaultManagerName.trim()) args.splice(1, 0, "--name", vaultManagerName.trim());
+      const result = await lexiconApi().run("init-vault", args);
+      setVaultManagerResult(`Vault registered: ${result.name ?? (vaultManagerName.trim() || path)}`);
+      await refreshVaultRegistry();
+      await refreshVault(path);
+      await loadVaultAgent(true, path);
+    } catch (err) {
+      reportError(err);
+    } finally {
+      setVaultsBusy(false);
+    }
+  }
+
+  async function loadManagedVault(item: VaultSummary, targetView?: ActiveView) {
+    if (!item.exists) {
+      setError(`Vault path does not exist: ${item.path}`);
+      return;
+    }
+    setVaultPath(item.path);
+    setVaultManagerPath(item.path);
+    localStorage.setItem("lexicon.vaultPath", item.path);
+    setVaultManagerResult(`Loaded vault: ${item.name}`);
+    await refreshVault(item.path);
+    await loadVaultAgent(false, item.path);
+    if (targetView) setActiveView(targetView);
+  }
+
+  async function removeManagedVault(item: VaultSummary) {
+    setVaultsBusy(true);
+    setError(null);
+    setVaultManagerResult(null);
+    try {
+      await lexiconApi().run("vaults", ["--remove", item.name, "--json"]);
+      setVaultManagerResult(`Removed registry entry: ${item.name}. Vault folder was not deleted.`);
+      await refreshVaultRegistry();
+    } catch (err) {
+      reportError(err);
+    } finally {
+      setVaultsBusy(false);
+    }
+  }
+
+  async function chooseVaultDirectory() {
+    const selected = await lexiconApi().selectDirectory();
+    if (selected) {
+      setVaultManagerPath(selected);
+      setVaultPath(selected);
+      if (!vaultManagerName.trim()) {
+        setVaultManagerName(selected.split(/[\\/]/).filter(Boolean).pop() ?? "Lexicon Vault");
+      }
     }
   }
 
@@ -336,7 +531,7 @@ function App() {
     try {
       const cleanQuery = query.trim();
       const args = cleanQuery
-        ? ["--vault", vaultPath, "--search", cleanQuery, "--limit", "12", "--json"]
+        ? ["--vault", vaultPath, "--search", cleanQuery, "--include-connected", "--limit", "12", "--json"]
         : ["--vault", vaultPath, "--json"];
       const result = await lexiconApi().run("workspace", args);
       if (cleanQuery) {
@@ -372,6 +567,11 @@ function App() {
 
   function navigateWikilink(target: string) {
     const cleanTarget = target.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0].trim();
+    if (cleanTarget.startsWith("vault:")) {
+      void selectWorkspaceNote(cleanTarget);
+      setActiveView("workspace");
+      return;
+    }
     const normalizedTarget = cleanTarget.replace(/\\/g, "/").replace(/\.md$/i, "").toLowerCase();
     const matched = workspaceNotes.find((note) => {
       const path = note.path.replace(/\\/g, "/").replace(/\.md$/i, "").toLowerCase();
@@ -527,13 +727,14 @@ function App() {
     }
   }
 
-  async function loadVaultAgent(init = false) {
-    if (!vaultPath.trim()) return;
+  async function loadVaultAgent(init = false, pathOverride = vaultPath) {
+    const targetPath = pathOverride.trim();
+    if (!targetPath) return;
     setAgentBusy(true);
     setError(null);
     setAgentResult(null);
     try {
-      const args = ["--vault", vaultPath, "--json"];
+      const args = ["--vault", targetPath, "--json"];
       if (init) args.splice(2, 0, "--init");
       const result = await lexiconApi().run("agent", args);
       setAgent(result.agent);
@@ -806,6 +1007,12 @@ function App() {
     refreshAppHealth().catch((err) => {
       reportError(err);
     });
+    refreshVaultRegistry().catch((err) => {
+      reportError(err);
+    });
+    refreshMineruRuntime().catch((err) => {
+      reportError(err);
+    });
   }, []);
 
   useEffect(() => {
@@ -848,6 +1055,7 @@ function App() {
         </div>
         <nav className="nav-list" aria-label="Primary">
           <button className={activeView === "setup" ? "active" : ""} onClick={() => setActiveView("setup")}>Setup</button>
+          <button className={activeView === "vaults" ? "active" : ""} onClick={() => setActiveView("vaults")}>Vaults</button>
           <button className={activeView === "dashboard" ? "active" : ""} onClick={() => setActiveView("dashboard")}>Dashboard</button>
           <button className={activeView === "workspace" ? "active" : ""} onClick={() => setActiveView("workspace")}>Workspace</button>
           <button className={activeView === "chat" ? "active" : ""} onClick={() => setActiveView("chat")}>Chat</button>
@@ -865,6 +1073,8 @@ function App() {
             <p className="topbar-copy">
               {activeView === "setup"
                 ? "Create or load a vault, verify AI and MinerU, prepare agent.md, then enter the workspace."
+                : activeView === "vaults"
+                  ? "Create, register, inspect, and switch between local knowledge vaults."
                 : activeView === "workspace"
                 ? "Browse committed notes, inspect Markdown, and move into chat when a question needs synthesis."
                 : activeView === "chat"
@@ -880,10 +1090,10 @@ function App() {
           </div>
           <button
             className="primary"
-            onClick={() => void Promise.all([refreshAppHealth(), refreshVault(), activeView === "workspace" ? refreshWorkspace() : Promise.resolve()])}
-            disabled={loading || ingestBusy || workspaceBusy || chatBusy || reviewBusy || decayBusy || settingsBusy || agentBusy}
+            onClick={() => void Promise.all([refreshAppHealth(), refreshMineruRuntime(), refreshVault(), activeView === "workspace" ? refreshWorkspace() : Promise.resolve()])}
+            disabled={loading || ingestBusy || workspaceBusy || chatBusy || reviewBusy || decayBusy || settingsBusy || agentBusy || vaultsBusy || mineruRuntimeBusy}
           >
-            {loading || workspaceBusy || chatBusy || reviewBusy || decayBusy || settingsBusy || agentBusy ? "Refreshing" : "Refresh"}
+            {loading || workspaceBusy || chatBusy || reviewBusy || decayBusy || settingsBusy || agentBusy || vaultsBusy || mineruRuntimeBusy ? "Refreshing" : "Refresh"}
           </button>
         </header>
 
@@ -893,6 +1103,8 @@ function App() {
         {settingsResult ? <div className="success-panel">{settingsResult}</div> : null}
         {agentResult ? <div className="success-panel">{agentResult}</div> : null}
         {setupResult ? <div className="success-panel">{setupResult}</div> : null}
+        {vaultManagerResult ? <div className="success-panel">{vaultManagerResult}</div> : null}
+        {mineruRuntimeResult ? <div className="success-panel">{mineruRuntimeResult}</div> : null}
 
         <section className="vault-control">
           <label htmlFor="vaultPath">Vault path</label>
@@ -908,7 +1120,97 @@ function App() {
           </div>
         </section>
 
-        {activeView === "setup" ? (
+        {activeView === "vaults" ? (
+          <section className="vault-manager-grid">
+            <section className="panel vault-create-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="panel-kicker">Vault registry</p>
+                  <h3>Create or register vault</h3>
+                </div>
+                <span className="status">{vaults.length} registered</span>
+              </div>
+              <div className="form-grid setup-form-grid">
+                <label>
+                  Vault name
+                  <input value={vaultManagerName} onChange={(event) => setVaultManagerName(event.target.value)} placeholder="Clinical Pharmacology" disabled={vaultsBusy} />
+                </label>
+                <label>
+                  Vault path
+                  <div className="input-row compact-row">
+                    <input value={vaultManagerPath} onChange={(event) => setVaultManagerPath(event.target.value)} placeholder="D:\Lexicon\vaults\clinical-pharmacology" spellCheck={false} disabled={vaultsBusy} />
+                    <button onClick={() => void chooseVaultDirectory()} disabled={vaultsBusy}>Browse</button>
+                  </div>
+                </label>
+              </div>
+              <p className="inline-help">
+                This creates a local Markdown vault if missing, ensures <code>agent.md</code> exists, and registers it for fast switching.
+              </p>
+              <div className="button-row">
+                <button onClick={() => void refreshVaultRegistry()} disabled={vaultsBusy}>Refresh registry</button>
+                <button className="primary" onClick={() => void createOrRegisterManagedVault()} disabled={vaultsBusy || !vaultManagerPath.trim()}>
+                  {vaultsBusy ? "Working" : "Create / register"}
+                </button>
+              </div>
+            </section>
+
+            <section className="panel vault-registry-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="panel-kicker">Local vaults</p>
+                  <h3>Registered vaults</h3>
+                </div>
+                <span className={vaultsBusy ? "status" : "status ready"}>{vaultsBusy ? "refreshing" : "ready"}</span>
+              </div>
+              {vaults.length === 0 ? (
+                <div className="empty-state">
+                  <strong>No registered vaults</strong>
+                  <p>Create or register a vault to start managing local knowledge domains.</p>
+                </div>
+              ) : (
+                <div className="vault-card-list">
+                  {vaults.map((item) => {
+                    const isActive = item.path === vaultPath;
+                    return (
+                      <article key={`${item.name}:${item.path}`} className={isActive ? "vault-manager-card active" : "vault-manager-card"}>
+                        <div className="vault-manager-card-main">
+                          <div>
+                            <p className="panel-kicker">{isActive ? "Active vault" : item.status}</p>
+                            <h3>{item.name}</h3>
+                            <span>{item.path}</span>
+                            {item.error ? <small>{item.error}</small> : null}
+                          </div>
+                          <span className={item.status === "ok" ? "status ready" : "status danger"}>{item.status}</span>
+                        </div>
+                        <div className="vault-metrics-row">
+                          <Metric label="Notes" value={item.notes_count} note="committed" />
+                          <Metric label="Inbox" value={item.inbox_count} note="pending" tone={item.inbox_count ? "warn" : undefined} />
+                          <Metric label="Expired" value={item.expired_count} note="decay" tone={item.expired_count ? "warn" : undefined} />
+                          <Metric label="Due soon" value={item.due_soon_count} note="decay" />
+                          <Metric label="Agent" value={item.agent_exists ? "yes" : "no"} note="agent.md" tone={item.agent_exists ? "ok" : "warn"} />
+                        </div>
+                        <div className="button-row vault-manager-actions">
+                          <button onClick={() => void removeManagedVault(item)} disabled={vaultsBusy}>
+                            Remove
+                          </button>
+                          <button onClick={() => void loadManagedVault(item)} disabled={vaultsBusy || !item.exists}>
+                            {isActive ? "Reload" : "Load"}
+                          </button>
+                          <button onClick={() => void loadManagedVault(item, "workspace")} disabled={vaultsBusy || !item.exists || !item.agent_exists}>
+                            Workspace
+                          </button>
+                          <button className="primary" onClick={() => void loadManagedVault(item, "dashboard")} disabled={vaultsBusy || !item.exists || !item.agent_exists}>
+                            Open dashboard
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </section>
+        ) : activeView === "setup" ? (
           <section className="setup-flow">
             <section className="panel setup-hero-panel">
               <div className="panel-header">
@@ -1013,6 +1315,26 @@ function App() {
                       {row.name}: {row.status}
                     </span>
                   ))}
+                </div>
+                <div className="runtime-mini-panel">
+                  <div>
+                    <strong>MinerU runtime</strong>
+                    <span>
+                      {mineruEndpointReachable
+                        ? "endpoint reachable"
+                        : mineruManagedRunning
+                          ? `managed process running${mineruRuntime?.pid ? `, PID ${mineruRuntime.pid}` : ""}`
+                          : "not started by Lexicon"}
+                    </span>
+                  </div>
+                  <div className="button-row">
+                    <button onClick={() => void startMineruRuntime()} disabled={mineruRuntimeBusy || !mineruCommand.trim() || mineruEndpointReachable || mineruManagedRunning}>
+                      Start MinerU
+                    </button>
+                    <button onClick={() => void stopMineruRuntime()} disabled={mineruRuntimeBusy || !mineruManagedRunning}>
+                      Stop
+                    </button>
+                  </div>
                 </div>
               </section>
 
@@ -1186,6 +1508,57 @@ function App() {
                   </span>
                 ))}
               </div>
+            </section>
+
+            <section className="panel mineru-runtime-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="panel-kicker">Local OCR service</p>
+                  <h3>MinerU runtime</h3>
+                </div>
+                <span className={mineruEndpointReachable || mineruManagedRunning ? "status ready" : "status"}>
+                  {mineruEndpointReachable
+                    ? "endpoint reachable"
+                    : mineruManagedRunning
+                      ? `managed PID ${mineruRuntime?.pid ?? "-"}`
+                      : "stopped"}
+                </span>
+              </div>
+              <div className="form-grid settings-form-grid">
+                <label>
+                  Command
+                  <input value={mineruCommand} onChange={(event) => setMineruCommand(event.target.value)} placeholder="D:\MinerU\.venv\Scripts\mineru-api.exe" disabled={mineruRuntimeBusy} />
+                </label>
+                <label>
+                  Arguments
+                  <input value={mineruArgsText} onChange={(event) => setMineruArgsText(event.target.value)} placeholder="--host 127.0.0.1 --port 8888" disabled={mineruRuntimeBusy} />
+                </label>
+                <label>
+                  Working directory
+                  <input value={mineruCwd} onChange={(event) => setMineruCwd(event.target.value)} placeholder="D:\MinerU" disabled={mineruRuntimeBusy} />
+                </label>
+                <label>
+                  Endpoint used by Lexicon
+                  <input value={mineruEndpoint} onChange={(event) => setMineruEndpoint(event.target.value)} placeholder="http://127.0.0.1:8888" disabled={settingsBusy} />
+                </label>
+              </div>
+              <p className="inline-help">
+                Lexicon starts only the local MinerU API process configured here. If MinerU is already reachable, Lexicon reuses it instead of spawning another process.
+              </p>
+              <div className="button-row">
+                <button onClick={saveMineruRuntimeDefaults} disabled={mineruRuntimeBusy}>Save command</button>
+                <button onClick={() => void refreshMineruRuntime()} disabled={mineruRuntimeBusy}>Runtime status</button>
+                <button onClick={() => void saveMineruEndpoint()} disabled={ingestBusy}>Save endpoint</button>
+                <button onClick={() => void startMineruRuntime()} disabled={mineruRuntimeBusy || !mineruCommand.trim() || mineruEndpointReachable || mineruManagedRunning}>
+                  Start MinerU
+                </button>
+                <button onClick={() => void stopMineruRuntime()} disabled={mineruRuntimeBusy || !mineruManagedRunning}>Stop</button>
+              </div>
+              {mineruRuntime?.lastError && !mineruEndpointReachable ? (
+                <pre className="runtime-log danger">{mineruRuntime.lastError}</pre>
+              ) : mineruRuntime?.lastOutput ? (
+                <pre className="runtime-log">{mineruRuntime.lastOutput}</pre>
+              ) : null}
             </section>
 
             <section className="panel agent-panel">
@@ -2066,6 +2439,19 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
       {children}
     </section>
   );
+}
+
+function normalizePathKey(path: string) {
+  return path.trim().replace(/\\/g, "/").replace(/\/+$/g, "").toLowerCase();
+}
+
+function splitCommandArgs(value: string) {
+  const args: string[] = [];
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  for (const match of value.matchAll(pattern)) {
+    args.push(match[1] ?? match[2] ?? match[3] ?? "");
+  }
+  return args.filter(Boolean);
 }
 
 function SetupStep({ label, done }: { label: string; done: boolean }) {

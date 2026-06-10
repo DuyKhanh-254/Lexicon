@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 
 from lexicon.search import chunk_markdown, index_path, rebuild_index, search, similar_existing
-from lexicon.vault import Vault
+from lexicon.vault import Vault, parse_connected_vaults
+from lexicon.workspace import read_note, search_notes
 
 
 def test_chunk_markdown_splits_by_heading_and_token_windows():
@@ -90,3 +91,39 @@ def test_similar_existing_catches_short_paraphrase(tmp_path, monkeypatch):
 
     assert matches
     assert matches[0]["path"] == "guidelines/aminoglycoside-monitoring.md"
+
+
+def test_connected_vaults_are_read_only_search_context(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEXICON_HOME", str(tmp_path / "home"))
+    primary = Vault.init(tmp_path / "primary")
+    reference = Vault.init(tmp_path / "epidemiology", name="Epidemiology")
+    (reference.path / "concepts" / "cohort-study-design.md").write_text(
+        "# Cohort Study Design\n\nCohort studies follow exposed and unexposed groups over time.",
+        encoding="utf-8",
+    )
+    (primary.path / "agent.md").write_text(
+        f"""# Agent - Primary
+
+## Role
+Curate clinical notes.
+
+## Connected vaults
+- Epidemiology: {reference.path} (read-only)
+""",
+        encoding="utf-8",
+    )
+    rebuild_index(primary)
+    rebuild_index(reference)
+
+    connected = parse_connected_vaults((primary.path / "agent.md").read_text(encoding="utf-8"), primary.path)
+    assert connected[0].name == "Epidemiology"
+    assert connected[0].path == reference.path
+
+    hits = search_notes(primary, "exposed unexposed cohort", include_connected=True)
+    assert hits[0]["path"] == "vault:Epidemiology/concepts/cohort-study-design.md"
+    assert hits[0]["external"] is True
+
+    note = read_note(primary, "vault:Epidemiology/concepts/cohort-study-design.md")
+    assert note["external"] is True
+    assert note["vault_name"] == "Epidemiology"
+    assert "exposed and unexposed" in note["body"]

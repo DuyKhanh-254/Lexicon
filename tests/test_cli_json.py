@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 
 from lexicon.cli import main
 from lexicon.config import AppConfig
@@ -29,6 +30,46 @@ def test_settings_json_outputs_machine_readable_payload(capsys, tmp_path, monkey
     assert data["ok"] is True
     assert data["settings"]["provider"] == "local"
     assert data["settings"]["default_knowledge_mode"] == "vault+model"
+
+
+def test_vaults_json_lists_registered_vault_health(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("LEXICON_HOME", str(tmp_path / "home"))
+
+    vault_path = tmp_path / "vault"
+    assert main(["init-vault", str(vault_path), "--name", "Clinical", "--json"]) == 0
+    capsys.readouterr()
+    (vault_path / "concepts" / "renal.md").write_text("# Renal\n\nDose adjustment.", encoding="utf-8")
+    (vault_path / "_inbox" / "review.md").write_text(
+        """---
+title: "Review"
+source: "manual"
+suggested_folder: "concepts"
+confidence: 0.7
+---
+
+# Review
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["vaults", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+
+    assert data["ok"] is True
+    assert data["vaults"][0]["name"] == "Clinical"
+    assert data["vaults"][0]["status"] == "ok"
+    assert data["vaults"][0]["notes_count"] == 1
+    assert data["vaults"][0]["inbox_count"] == 1
+
+    assert main(["vaults", "--remove", "Clinical", "--json"]) == 0
+    removed = json.loads(capsys.readouterr().out)
+    assert removed["ok"] is True
+    assert removed["removed"] == "Clinical"
+    assert Path(removed["path"]).exists()
+
+    assert main(["vaults", "--json"]) == 0
+    after_remove = json.loads(capsys.readouterr().out)
+    assert after_remove["vaults"] == []
 
 
 def test_agent_json_reads_saves_and_initializes_agent_md(capsys, tmp_path, monkeypatch):

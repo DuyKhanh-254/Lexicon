@@ -6,9 +6,11 @@ Lexicon hiện đi theo hướng **desktop app độc lập**. Python core chỉ
 
 ## Tính năng hiện tại
 
-- Desktop app Electron + React: Dashboard, Workspace, Chat, Review, Decay, Settings.
+- Desktop app Electron + React: Setup, Vault Manager, Dashboard, Workspace, Chat, Review, Decay, Settings.
+- Vault Manager: tạo/register vault, xem trạng thái từng vault, gỡ entry khỏi registry, load nhanh vào dashboard/workspace.
 - Add Source: URL, PDF/file, Image, Note.
 - MinerU integration cho PDF scan và image OCR.
+- MinerU runtime control: cấu hình command local, start/stop MinerU API từ desktop app.
 - Human Review Gate: sửa Markdown, xem preview, approve/reject.
 - Duplicate workflow: Keep new, Link related, Merge into existing.
 - Workspace: browse notes, search chunks, đọc Markdown đã render, mở wikilink.
@@ -135,6 +137,16 @@ Lexicon gọi MinerU qua:
 POST http://127.0.0.1:8888/file_parse
 ```
 
+Trong desktop app, có thể vào `Settings` -> `MinerU runtime` để cấu hình command, ví dụ:
+
+```text
+Command: D:\MinerU\.venv\Scripts\mineru-api.exe
+Arguments: --host 127.0.0.1 --port 8888
+Working directory: D:\MinerU
+```
+
+Sau đó bấm `Start MinerU`. Tính năng này chỉ start/stop MinerU đã được cài sẵn, không tự cài MinerU hoặc tự download model.
+
 ## Chạy desktop app
 
 Terminal 1: chạy AI local nếu dùng local endpoint.
@@ -169,11 +181,26 @@ Lưu ý: `npm.cmd install` và `npm.cmd run dev` phải chạy trong `desktop-ap
 4. Trong Setup, cấu hình AI endpoint/API key env và bấm `Save settings`.
 5. Bấm `Run doctor` để kiểm tra `ai_provider`, `mineru`, `requests`.
 6. Tạo hoặc load `agent.md`, chỉnh rule nếu cần, rồi bấm `Save agent.md`.
-7. Vào `Dashboard` hoặc `Review`, dùng Add Source để ingest text/file/image/url.
-8. Vào `Review`, sửa Markdown, xử lý duplicate, rồi approve.
-9. Vào `Workspace` để đọc/search note đã commit.
-10. Vào `Chat` để hỏi vault và có thể lưu answer vào review queue.
-11. Vào `Decay` để kiểm tra/cập nhật note quá hạn.
+7. Vào `Vaults` để xem các vault đã đăng ký, tạo/register vault mới, hoặc chuyển active vault.
+8. Vào `Dashboard` hoặc `Review`, dùng Add Source để ingest text/file/image/url.
+9. Vào `Review`, sửa Markdown, xử lý duplicate, rồi approve.
+10. Vào `Workspace` để đọc/search note đã commit.
+11. Vào `Chat` để hỏi vault và có thể lưu answer vào review queue.
+12. Vào `Decay` để kiểm tra/cập nhật note quá hạn.
+
+## Inter-vault reference
+
+Mot vault co the doc them vault khac theo che do read-only neu khai bao trong `agent.md`:
+
+```markdown
+## Connected vaults
+- Epidemiology: D:\Knowledge\Epidemiology (read-only)
+- D:\Knowledge\Pharmacology (read-only)
+```
+
+Khi search trong Workspace, Lexicon co the hien ket qua tu vault lien ket voi path dang `vault:Name/folder/note.md`.
+Trong Chat, neu dung context tu vault lien ket, citation se co dang `[[vault:Name/folder/note.md]]`.
+Vault lien ket chi dung lam nguon tham khao read-only; approve/review/ingest van chi ghi vao active vault.
 
 ## CLI workflow nhanh
 

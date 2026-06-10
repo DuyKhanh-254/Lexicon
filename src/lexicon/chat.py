@@ -4,14 +4,14 @@ from .ai import build_provider
 from .config import AppConfig
 from .decay import decay_warning
 from .models import ProcessedNote, utc_now_iso
-from .search import search
 from .vault import Vault, slugify
+from .workspace import search_notes
 
 
 def answer(vault: Vault, question: str, mode: str | None = None, config: AppConfig | None = None) -> str:
     config = config or AppConfig.load()
     mode = mode or config.default_knowledge_mode
-    hits = search(vault, question, limit=5)
+    hits = search_notes(vault, question, limit=8, include_connected=True)
     context = "\n\n".join(
         f"[[{hit['path']}]]"
         f"{' / ' + hit['heading'] if hit.get('heading') else ''}"
@@ -34,9 +34,11 @@ Question:
 
 Rules:
 - Cite vault notes with [[note]] when using them.
+- Cite connected read-only vault notes with [[vault:VaultName/path.md]] when using them.
 - If a context note includes an expiry warning, mention that the source may be outdated.
 - If vault-only and context is missing, say the vault does not contain the answer.
 - If using model knowledge, clearly separate it from vault-backed claims.
+- Connected vault context is read-only reference material; do not imply it was written into the active vault.
 """
     return build_provider(config).complete(system, user)
 

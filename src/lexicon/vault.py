@@ -25,6 +25,13 @@ You are a domain-specific knowledge curator for this vault.
 """
 
 
+@dataclass(frozen=True)
+class ConnectedVault:
+    name: str
+    path: Path
+    mode: str = "read-only"
+
+
 def slugify(value: str) -> str:
     value = value.strip().lower()
     value = re.sub(r"[^a-z0-9\u00c0-\u1ef9]+", "-", value, flags=re.IGNORECASE)
@@ -66,6 +73,9 @@ class Vault:
 
     def read_agent(self) -> str:
         return (self.path / "agent.md").read_text(encoding="utf-8")
+
+    def connected_vaults(self) -> list[ConnectedVault]:
+        return parse_connected_vaults(self.read_agent(), base_path=self.path)
 
     def write_agent(self, body: str) -> Path:
         target = self.path / "agent.md"
@@ -131,3 +141,48 @@ class Vault:
             if line.startswith("suggested_folder:"):
                 return line.split(":", 1)[1].strip().strip('"')
         return None
+
+
+def parse_connected_vaults(agent_body: str, base_path: Path | None = None) -> list[ConnectedVault]:
+    in_section = False
+    connected: list[ConnectedVault] = []
+    seen: set[str] = set()
+    for raw_line in agent_body.splitlines():
+        line = raw_line.strip()
+        if line.startswith("## "):
+            in_section = line[3:].strip().lower() == "connected vaults"
+            continue
+        if not in_section:
+            continue
+        if line.startswith("#"):
+            break
+        match = re.match(r"^[-*]\s+(.+)$", line)
+        if not match:
+            continue
+        item = match.group(1).strip()
+        mode = "read-only" if re.search(r"\(read-only\)\s*$", item, flags=re.I) else "read-only"
+        item = re.sub(r"\s*\(read-only\)\s*$", "", item, flags=re.I).strip()
+        if not item:
+            continue
+        name, raw_path = _split_connected_vault_item(item)
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute() and base_path is not None:
+            path = (base_path / path).resolve()
+        else:
+            path = path.resolve()
+        vault_name = name or path.name
+        key = vault_name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        connected.append(ConnectedVault(name=vault_name, path=path, mode=mode))
+    return connected
+
+
+def _split_connected_vault_item(item: str) -> tuple[str | None, str]:
+    if re.match(r"^[A-Za-z]:[\\/]", item):
+        return None, item
+    match = re.match(r"^([^:]{2,80}):\s+(.+)$", item)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    return None, item
